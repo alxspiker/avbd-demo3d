@@ -1,0 +1,67 @@
+name: Build All
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: 'recursive'
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential libgl1-mesa-dev libglu1-mesa-dev libx11-dev
+
+    - name: Configure CMake for Desktop
+      run: cmake -S . -B build
+
+    - name: Build for Desktop
+      run: cmake --build build --verbose
+
+    - name: Upload Desktop Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: linux-build
+        path: build/avbd_demo3d
+
+  build-web:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: 'recursive'
+
+    - name: Setup Emscripten
+      uses: mymindstorm/setup-emsdk@v12
+      with:
+        version: '3.1.55'
+        
+    - name: Configure CMake for Web
+      run: |
+        source ./emsdk/emsdk_env.sh
+        emcmake cmake -S . -B build -G "Unix Makefiles"
+
+    - name: Build for Web
+      run: |
+        source ./emsdk/emsdk_env.sh
+        cmake --build build --verbose
+
+    - name: Upload Web Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: web-build
+        path: |
+          build/index.html
+          build/index.js
+          build/index.wasm
