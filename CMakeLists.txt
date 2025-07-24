@@ -46,7 +46,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE ${IMGUI_PROJECT_NAME})
 
 # --- Platform-Specific Linking (Simplified and Robust) ---
 if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -s USE_SDL=2 -s USE_WEBGL2=1 -s ALLOW_MEMORY_GROWTH=1 -s SINGLE_FILE=1 -s LEGACY_GL_EMULATION=1 --shell-file source/shell.html")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -s USE_SDL=2 -s USE_WEBGL2=1 -s ALLOW_MEMORY_GROWTH=1 -s SINGLE_FILE=1 -s LEGACY_GL_EMULATION=1 --shell-file ${CMAKE_SOURCE_DIR}/source/shell.html")
     set(CMAKE_EXECUTABLE_SUFFIX ".html")
 else()
     # Desktop Build (Windows, Linux, macOS)
