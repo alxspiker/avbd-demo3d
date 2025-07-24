@@ -1,0 +1,5 @@
+code_snapshot.txt
+show_code.py
+build
+external/imgui/**
+external/SDL/**
