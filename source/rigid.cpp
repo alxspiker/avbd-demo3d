@@ -1,13 +1,12 @@
 /*
 * rigid.cpp - 3D AVBD Physics Engine
 *
-* CORRECTED: The constructor's signature now exactly matches the
-* declaration in solver.h, respecting 'const' and references '&'.
+* CORRECTED: Replaced legacy glColorMaterial with glEnable(GL_COLOR_MATERIAL)
+* for compatibility with Emscripten/WebGL.
 */
 
 #include "solver.h"
 
-// CORRECTED: Added 'const' and '&' to match the header declaration
 Rigid::Rigid(Solver* solver, const vec3& size, float density, float friction, const vec3& pos, const quat& orient, const vec3& linVel, const vec3& angVel)
     : solver(solver),
       forces(0),
@@ -61,7 +60,6 @@ mat3 Rigid::getInvInertiaTensorWorld() const
 
 bool Rigid::isConstrainedTo(Rigid* other) const
 {
-    // This traversal logic correctly checks the dual-linked list
     for (Force* f = forces; f != 0; f = (f->bodyA == this) ? f->nextA : f->nextB) {
         if (f->bodyB == other || f->bodyA == other) {
             return true;
@@ -98,8 +96,10 @@ void Rigid::draw() const
     
     glScalef(size.x, size.y, size.z);
 
+    // CORRECTED: This section is now WebGL compatible.
+    // Instead of using glColorMaterial, we just enable the GL_COLOR_MATERIAL state.
+    // This tells OpenGL to use the color set by glColor3f as the material color for lighting.
     glEnable(GL_COLOR_MATERIAL);
-    glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE);
     glColor3f(0.8f, 0.7f, 0.6f);
 
     glBegin(GL_QUADS);
@@ -110,6 +110,9 @@ void Rigid::draw() const
         }
     }
     glEnd();
+
+    // Disable color material when we are done so it doesn't affect other drawing.
+    glDisable(GL_COLOR_MATERIAL);
     
     glDisable(GL_LIGHTING);
     glColor3f(0.1f, 0.1f, 0.1f);
