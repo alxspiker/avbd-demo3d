@@ -28,8 +28,7 @@ jobs:
           libglu1-mesa-dev \
           libx11-dev \
           libxext-dev \
-          libasound2-dev \
-          libsdl2-dev
+          libasound2-dev
 
     - name: Configure and Build
       run: |
@@ -68,7 +67,7 @@ jobs:
       shell: powershell
 
     - name: Install dependencies
-      run: vcpkg install opengl glad sdl2
+      run: vcpkg install opengl glad
       shell: cmd
 
     - name: Configure and Build
@@ -131,7 +130,7 @@ jobs:
         source "${{ env.EMSDK }}/emsdk_env.sh"
         mkdir build-web
         cd build-web
-        emcmake cmake -G Ninja -DCMAKE_BUILD_TYPE=Release ..
+        emcmake cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-s USE_SDL=2 -s USE_WEBGL2=1 -s ALLOW_MEMORY_GROWTH=1 -s EXPORT_NAME=avbd_demo3d" ..
         ninja --verbose
 
     - name: List Build Outputs
