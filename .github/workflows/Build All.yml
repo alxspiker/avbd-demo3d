@@ -1,10 +1,14 @@
-name: C++ CI
+name: C++ CI and Release
 
 on:
   push:
     branches: [ "main" ]
+    tags: [ "v*" ]
   pull_request:
     branches: [ "main" ]
+
+permissions:
+  contents: write  # Required for creating releases and uploading assets
 
 jobs:
   build-linux:
@@ -137,3 +141,240 @@ jobs:
           build-web/avbd_demo3d.html
           build-web/avbd_demo3d.js
           build-web/avbd_demo3d.wasm
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [build-linux, build-windows, build-macos, build-web]
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download Linux Artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: linux-build
+        path: artifacts/linux
+
+    - name: Download Windows Artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: windows-build
+        path: artifacts/windows
+
+    - name: Download macOS Artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: macos-build
+        path: artifacts/macos
+
+    - name: Download Web Artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: web-build
+        path: artifacts/web
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref_name }}
+        release_name: Release ${{ github.ref_name }}
+        draft: false
+        prerelease: false
+
+    - name: Upload Linux Artifact
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: artifacts/linux/avbd_demo3d
+        asset_name: avbd_demo3d-linux
+        asset_content_type: application/octet-stream
+
+    - name: Upload Windows Artifact
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: artifacts/windows/avbd_demo3d.exe
+        asset_name: avbd_demo3d-windows.exe
+        asset_content_type: application/octet-stream
+
+    - name: Upload macOS Artifact
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: artifacts/macos/avbd_demo3d
+        asset_name: avbd_demo3d-macos
+        asset_content_type: application/octet-stream
+
+    - name: Upload Web HTML Artifact
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: artifacts/web/avbd_demo3d.html
+        asset_name: avbd_demo3d.html
+        asset_content_type: text/html
+
+    - name: Upload Web JS Artifact
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: artifacts/web/avbd_demo3d.js
+        asset_name: avbd_demo3d.js
+        asset_content_type: application/javascript
+
+    - name: Upload Web WASM Artifact
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: artifacts/web/avbd_demo3d.wasm
+        asset_name: avbd_demo3d.wasm
+        asset_content_type: application/wasm
+
+  prerelease:
+    runs-on: ubuntu-latest
+    needs: [build-linux, build-windows, build-macos, build-web]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Delete existing prerelease if exists
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const releases = await github.rest.repos.listReleases({
+            owner: context.repo.owner,
+            repo: context.repo.repo
+          });
+          const prerelease = releases.data.find(r => r.tag_name === 'prerelease');
+          if (prerelease) {
+            await github.rest.repos.deleteRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: prerelease.id
+            });
+            await github.rest.git.deleteRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'tags/prerelease'
+            });
+          }
+
+    - name: Create prerelease tag
+      run: |
+        git config user.name "GitHub Actions"
+        git config user.email "actions@github.com"
+        git tag prerelease ${{ github.sha }}
+        git push origin prerelease --force
+
+    - name: Download Linux Artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: linux-build
+        path: artifacts/linux
+
+    - name: Download Windows Artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: windows-build
+        path: artifacts/windows
+
+    - name: Download macOS Artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: macos-build
+        path: artifacts/macos
+
+    - name: Download Web Artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: web-build
+        path: artifacts/web
+
+    - name: Create Prerelease
+      id: create_prerelease
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: prerelease
+        release_name: Prerelease Build
+        draft: false
+        prerelease: true
+
+    - name: Upload Linux Artifact
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_prerelease.outputs.upload_url }}
+        asset_path: artifacts/linux/avbd_demo3d
+        asset_name: avbd_demo3d-linux
+        asset_content_type: application/octet-stream
+
+    - name: Upload Windows Artifact
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_prerelease.outputs.upload_url }}
+        asset_path: artifacts/windows/avbd_demo3d.exe
+        asset_name: avbd_demo3d-windows.exe
+        asset_content_type: application/octet-stream
+
+    - name: Upload macOS Artifact
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_prerelease.outputs.upload_url }}
+        asset_path: artifacts/macos/avbd_demo3d
+        asset_name: avbd_demo3d-macos
+        asset_content_type: application/octet-stream
+
+    - name: Upload Web HTML Artifact
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_prerelease.outputs.upload_url }}
+        asset_path: artifacts/web/avbd_demo3d.html
+        asset_name: avbd_demo3d.html
+        asset_content_type: text/html
+
+    - name: Upload Web JS Artifact
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_prerelease.outputs.upload_url }}
+        asset_path: artifacts/web/avbd_demo3d.js
+        asset_name: avbd_demo3d.js
+        asset_content_type: application/javascript
+
+    - name: Upload Web WASM Artifact
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_prerelease.outputs.upload_url }}
+        asset_path: artifacts/web/avbd_demo3d.wasm
+        asset_name: avbd_demo3d.wasm
+        asset_content_type: application/wasm
