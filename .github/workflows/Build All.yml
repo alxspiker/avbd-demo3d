@@ -26,12 +26,13 @@ jobs:
           libxext-dev \
           libasound2-dev
 
-    - name: Configure CMake
-      run: cmake -S . -B build
-
-    - name: Build
-      run: cmake --build build --verbose
-
+    - name: Configure and Build
+      run: |
+        mkdir build
+        cd build
+        cmake ..
+        cmake --build . --config Release --verbose
+        
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
@@ -48,19 +49,18 @@ jobs:
 
     - name: Setup vcpkg
       uses: lukka/run-vcpkg@v11
-      with:
-        vcpkgGitCommitId: '9d3d5e89d17d083106511394a55787606362d8e4'
+      # No git commit ID is specified to use the latest stable version
 
-    - name: Install dependencies with vcpkg
-      run: vcpkg install sdl2[core,x11] opengl glu --triplet x64-windows
+    - name: Install dependencies
+      run: vcpkg install sdl2 opengl glu
 
-    - name: Configure CMake
-      run: >
-        cmake -B build -S . 
-        -DCMAKE_TOOLCHAIN_FILE=${{ env.VCPKG_ROOT }}/scripts/buildsystems/vcpkg.cmake
-
-    - name: Build
-      run: cmake --build build --config Release --verbose
+    - name: Configure and Build
+      shell: cmd
+      run: |
+        mkdir build
+        cd build
+        cmake .. -DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT%/scripts/buildsystems/vcpkg.cmake
+        cmake --build . --config Release --verbose
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
@@ -79,11 +79,12 @@ jobs:
     - name: Install dependencies
       run: brew install sdl2 pkg-config
 
-    - name: Configure CMake
-      run: cmake -S . -B build
-
-    - name: Build
-      run: cmake --build build --verbose
+    - name: Configure and Build
+      run: |
+        mkdir build
+        cd build
+        cmake .. -DCMAKE_PREFIX_PATH=$(brew --prefix)
+        cmake --build . --config Release --verbose
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
@@ -104,21 +105,19 @@ jobs:
       with:
         version: '3.1.55'
         
-    - name: Configure CMake
+    - name: Configure and Build
       run: |
         source ./emsdk/emsdk_env.sh
-        emcmake cmake -S . -B build -G "Unix Makefiles"
-
-    - name: Build
-      run: |
-        source ./emsdk/emsdk_env.sh
-        cmake --build build --verbose
+        mkdir build-web
+        cd build-web
+        emcmake cmake ..
+        cmake --build . --verbose
 
     - name: Upload Web Artifact
       uses: actions/upload-artifact@v4
       with:
         name: web-build
         path: |
-          build/avbd_demo3d.html
-          build/avbd_demo3d.js
-          build/avbd_demo3d.wasm
+          build-web/avbd_demo3d.html
+          build-web/avbd_demo3d.js
+          build-web/avbd_demo3d.wasm
