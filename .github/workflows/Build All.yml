@@ -60,7 +60,9 @@ jobs:
       shell: powershell
 
     - name: Install dependencies
-      run: vcpkg install sdl2 opengl glu
+      # FIX: Removed 'glu' as it is not a standalone vcpkg package.
+      # The 'opengl' package provides the necessary find-modules for both OpenGL and GLU.
+      run: vcpkg install sdl2 opengl
 
     - name: Configure and Build
       run: |
