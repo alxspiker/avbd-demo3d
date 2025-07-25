@@ -8,44 +8,23 @@
         canvas { width: 100vw; height: 100vh; display: block; }
     </style>
     <script>
-
         var Module = {
             preRun: [],
             postRun: [],
             print: (function() {
                 return function(text) { console.log(text); };
             })(),
-            canvas: document.createElement("canvas"), // Create the canvas element early
+            canvas: (function() {
+                return document.getElementById('canvas');
+            })(),
             onRuntimeInitialized: function() {
                 console.log("WASM Ready!");
-				
-							document.getElementById("canvas").addEventListener("contextmenu", function(event) {
-				event.preventDefault();
-			});
             }
         };
-
-        document.addEventListener("DOMContentLoaded", function() {
-		
-            let body = document.body;
-            body.appendChild(Module.canvas);  // Ensure canvas is in the DOM
-            Module.canvas.id = "canvas";     // Set the correct ID
-            console.log("Canvas added to DOM, initializing WebGL...");
-
-            let gl = Module.canvas.getContext("webgl2");
-            if (!gl) {
-                console.error("Failed to get WebGL2 context. Falling back to WebGL1...");
-                gl = Module.canvas.getContext("webgl");
-                if (!gl) {
-                    console.error("WebGL is not supported!");
-                }
-            } else {
-                console.log("WebGL2 initialized successfully!");
-            }
-        });
     </script>
 </head>
 <body>
+    <canvas id="canvas" oncontextmenu="event.preventDefault()"></canvas>
     {{{ SCRIPT }}}
 </body>
 </html>
