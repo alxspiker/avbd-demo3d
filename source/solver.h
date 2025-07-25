@@ -6,6 +6,18 @@
 
 #pragma once
 
+#ifdef _WIN32
+#ifndef APIENTRY
+#define APIENTRY __stdcall
+#endif
+#ifndef WINGDIAPI
+#define WINGDIAPI __declspec(dllimport)
+#endif
+#ifndef GLAPI
+#define GLAPI WINGDIAPI
+#endif
+#endif
+
 #include <GL/gl.h>
 #include "maths.h"
 
