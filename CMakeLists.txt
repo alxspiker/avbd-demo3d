@@ -4,6 +4,11 @@ cmake_minimum_required(VERSION 3.13)
 # Project Name
 project(avbd_demo3d)
 
+# Add platform-specific definitions for Windows to prevent header conflicts
+if(WIN32)
+    add_definitions(-DWIN32_LEAN_AND_MEAN -DNOMINMAX)
+endif()
+
 # Set C++ Standard
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
