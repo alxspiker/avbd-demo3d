@@ -19,6 +19,10 @@ file(GLOB_RECURSE SOURCES "source/*.cpp" "source/*.h")
 # Add Executable
 add_executable(${PROJECT_NAME} ${SOURCES})
 
+if(WIN32)
+    target_compile_definitions(avbd_demo3d PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+endif()
+
 # Include SDL2 first (ImGui needs it)
 add_subdirectory(external/SDL)
 
