@@ -4,6 +4,8 @@
 ![Language](https://img.shields.io/badge/language-C%2B%2B17-orange.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS%20%7C%20Web-brightgreen.svg)
 
+Test the latest version of this repo here:
+https://github.com/alxspiker/avbd-demo3d/releases/tag/prerelease
 ---
 
 This project is a 3D rigid body physics engine built from scratch in C++. It implements the **Augmented Vertex Block Descendent (AVBD)** algorithm, bringing the concepts from the original 2D demo into a fully 3D environment.
