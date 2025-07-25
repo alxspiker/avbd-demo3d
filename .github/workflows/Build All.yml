@@ -113,17 +113,21 @@ jobs:
         submodules: 'recursive'
 
     - name: Setup Emscripten
-      uses: mymindstorm/setup-emsdk@v12
+      uses: mymindstorm/setup-emsdk@v14
       with:
         version: '3.1.55'
+        actions-cache-folder: 'emsdk-cache'
+
+    - name: Install Ninja
+      run: sudo apt-get update && sudo apt-get install -y ninja-build
 
     - name: Configure and Build
       run: |
-        source ./emsdk/emsdk_env.sh
+        source "${{ github.workspace }}/emsdk/emsdk_env.sh"
         mkdir build-web
         cd build-web
-        emcmake cmake ..
-        cmake --build . --verbose
+        emcmake cmake -G Ninja ..
+        ninja --verbose
 
     - name: Upload Web Artifact
       uses: actions/upload-artifact@v4
