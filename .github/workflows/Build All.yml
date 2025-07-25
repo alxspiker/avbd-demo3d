@@ -49,7 +49,9 @@ jobs:
 
     - name: Setup vcpkg
       uses: lukka/run-vcpkg@v11
-      # No git commit ID is specified to use the latest stable version
+      with:
+        # Provide a recent, stable vcpkg commit ID to avoid lookup errors
+        vcpkgGitCommitId: a0f2e0524419996d1ab757a3e7925e5104033b09
 
     - name: Install dependencies
       run: vcpkg install sdl2 opengl glu
@@ -83,7 +85,7 @@ jobs:
       run: |
         mkdir build
         cd build
-        cmake .. -DCMAKE_PREFIX_PATH=$(brew --prefix)
+        cmake ..
         cmake --build . --config Release --verbose
 
     - name: Upload Artifact
