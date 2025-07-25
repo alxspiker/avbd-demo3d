@@ -60,7 +60,7 @@ jobs:
       shell: powershell
 
     - name: Install dependencies
-      run: vcpkg install sdl2 opengl
+      run: vcpkg install opengl
 
     - name: Configure and Build
       run: |
@@ -73,7 +73,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: windows-build
-        path: build/Release/
+        path: build/Release/avbd_demo3d.exe
 
   build-macos:
     runs-on: macos-latest
