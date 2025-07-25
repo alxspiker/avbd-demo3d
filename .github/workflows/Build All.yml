@@ -123,7 +123,7 @@ jobs:
 
     - name: Configure and Build
       run: |
-        source "${{ github.workspace }}/emsdk/emsdk_env.sh"
+        source "${{ env.EMSDK }}/emsdk_env.sh"
         mkdir build-web
         cd build-web
         emcmake cmake -G Ninja ..
