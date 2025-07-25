@@ -13,10 +13,14 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Automatically collect all source files from the "source" directory
-file(GLOB_RECURSIVE SOURCES "source/*.cpp" "source/*.h")
+file(GLOB_RECURSE SOURCES "source/*.cpp" "source/*.h")
 
 # Add Executable
 add_executable(${PROJECT_NAME} ${SOURCES})
+
+if(WIN32)
+    target_compile_definitions(avbd_demo3d PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+endif()
 
 # Include SDL2 first (ImGui needs it)
 add_subdirectory(external/SDL)
@@ -43,28 +47,50 @@ target_include_directories(${IMGUI_PROJECT_NAME} PUBLIC
 target_link_libraries(${IMGUI_PROJECT_NAME} PUBLIC SDL2::SDL2 SDL2::SDL2main)
 
 # Link the main project with SDL2 and ImGui
-target_include_directories(${PROJECT_NAME} PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/source"
-    external/SDL/include
-)
+target_include_directories(${PROJECT_NAME} PRIVATE external/SDL/include)
 target_link_libraries(${PROJECT_NAME} PRIVATE SDL2::SDL2 SDL2::SDL2main ${IMGUI_PROJECT_NAME})
 
-# Platform-Specific Configuration
 if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -s USE_SDL=2 -s USE_WEBGL2=1 -s ALLOW_MEMORY_GROWTH=1 -s SINGLE_FILE=1 -s EXPORT_NAME=avbd_demo3d -s MIN_WEBGL_VERSION=2 -s MAX_WEBGL_VERSION=2 --shell-file ${CMAKE_SOURCE_DIR}/source/shell.html")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -s USE_SDL=2 -s USE_WEBGL2=1 -s ALLOW_MEMORY_GROWTH=1 -s SINGLE_FILE=1 -s LEGACY_GL_EMULATION=1 --shell-file ../source/shell.html")
     set(CMAKE_EXECUTABLE_SUFFIX ".html")
-    set(CMAKE_EXECUTABLE_NAME "avbd_demo3d")
+else()
+    # Find and Link OpenGL
+    find_package(OpenGL REQUIRED)
+    target_link_libraries(${PROJECT_NAME} PRIVATE OpenGL::GL)
+endif()
+
+# Copy SDL2.dll to the output folder on Windows
+if(WIN32)
+    add_custom_command(
+        TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:SDL2::SDL2>    # Path to the built SDL2.dll
+            $<TARGET_FILE_DIR:${PROJECT_NAME}> # Output directory of the executable
+    )
+endif()
+
+# --- Main Project Linking ---
+target_include_directories(${PROJECT_NAME} PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/source"
+)
+# This is now sufficient, as linking to imgui will transitively link to SDL.
+target_link_libraries(${PROJECT_NAME} PRIVATE ${IMGUI_PROJECT_NAME})
+
+# --- Platform-Specific Linking ---
+if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -s USE_SDL=2 -s USE_WEBGL2=1 -s ALLOW_MEMORY_GROWTH=1 -s SINGLE_FILE=1 -s LEGACY_GL_EMULATION=1 --shell-file ${CMAKE_SOURCE_DIR}/source/shell.html")
+    set(CMAKE_EXECUTABLE_SUFFIX ".html")
 else()
     # Desktop Build
     find_package(OpenGL REQUIRED)
     find_package(GLU REQUIRED)
     
-    if(UNIX AND NOT APPLE)
-        find_package(X11 REQUIRED)
+    if (UNIX AND NOT APPLE)
+      find_package(X11 REQUIRED)
     endif()
 
     target_link_libraries(${PROJECT_NAME} PRIVATE
-        OpenGL::GL
+        ${OPENGL_LIBRARIES}
         ${GLU_LIBRARIES}
     )
     if(X11_FOUND)
@@ -77,7 +103,8 @@ if(WIN32)
     add_custom_command(
         TARGET ${PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            $<TARGET_FILE:SDL2::SDL2>
+            # Use the underlying target name here as well
+            $<TARGET_FILE:SDL2-static>
             $<TARGET_FILE_DIR:${PROJECT_NAME}>
     )
 endif()
