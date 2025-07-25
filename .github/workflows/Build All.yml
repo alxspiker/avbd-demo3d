@@ -178,6 +178,14 @@ jobs:
         name: web-build
         path: artifacts/web
 
+    - name: Check Web Artifacts
+      run: |
+        echo "Checking for Web artifacts in artifacts/web/"
+        ls -l artifacts/web/ || echo "No Web artifacts found"
+        [ -f artifacts/web/avbd_demo3d.html ] && echo "HTML_FOUND=true" >> $GITHUB_ENV || echo "HTML_FOUND=false" >> $GITHUB_ENV
+        [ -f artifacts/web/avbd_demo3d.js ] && echo "JS_FOUND=true" >> $GITHUB_ENV || echo "JS_FOUND=false" >> $GITHUB_ENV
+        [ -f artifacts/web/avbd_demo3d.wasm ] && echo "WASM_FOUND=true" >> $GITHUB_ENV || echo "WASM_FOUND=false" >> $GITHUB_ENV
+
     - name: Create Release
       id: create_release
       uses: actions/create-release@v1
@@ -228,7 +236,7 @@ jobs:
         asset_path: artifacts/web/avbd_demo3d.html
         asset_name: avbd_demo3d.html
         asset_content_type: text/html
-      if: exists('artifacts/web/avbd_demo3d.html')
+      if: env.HTML_FOUND == 'true'
 
     - name: Upload Web JS Artifact
       uses: actions/upload-release-asset@v1
@@ -239,7 +247,7 @@ jobs:
         asset_path: artifacts/web/avbd_demo3d.js
         asset_name: avbd_demo3d.js
         asset_content_type: application/javascript
-      if: exists('artifacts/web/avbd_demo3d.js')
+      if: env.JS_FOUND == 'true'
 
     - name: Upload Web WASM Artifact
       uses: actions/upload-release-asset@v1
@@ -250,7 +258,7 @@ jobs:
         asset_path: artifacts/web/avbd_demo3d.wasm
         asset_name: avbd_demo3d.wasm
         asset_content_type: application/wasm
-      if: exists('artifacts/web/avbd_demo3d.wasm')
+      if: env.WASM_FOUND == 'true'
 
   prerelease:
     runs-on: ubuntu-latest
@@ -315,6 +323,14 @@ jobs:
         name: web-build
         path: artifacts/web
 
+    - name: Check Web Artifacts
+      run: |
+        echo "Checking for Web artifacts in artifacts/web/"
+        ls -l artifacts/web/ || echo "No Web artifacts found"
+        [ -f artifacts/web/avbd_demo3d.html ] && echo "HTML_FOUND=true" >> $GITHUB_ENV || echo "HTML_FOUND=false" >> $GITHUB_ENV
+        [ -f artifacts/web/avbd_demo3d.js ] && echo "JS_FOUND=true" >> $GITHUB_ENV || echo "JS_FOUND=false" >> $GITHUB_ENV
+        [ -f artifacts/web/avbd_demo3d.wasm ] && echo "WASM_FOUND=true" >> $GITHUB_ENV || echo "WASM_FOUND=false" >> $GITHUB_ENV
+
     - name: Create Prerelease
       id: create_prerelease
       uses: actions/create-release@v1
@@ -365,7 +381,7 @@ jobs:
         asset_path: artifacts/web/avbd_demo3d.html
         asset_name: avbd_demo3d.html
         asset_content_type: text/html
-      if: exists('artifacts/web/avbd_demo3d.html')
+      if: env.HTML_FOUND == 'true'
 
     - name: Upload Web JS Artifact
       uses: actions/upload-release-asset@v1
@@ -376,7 +392,7 @@ jobs:
         asset_path: artifacts/web/avbd_demo3d.js
         asset_name: avbd_demo3d.js
         asset_content_type: application/javascript
-      if: exists('artifacts/web/avbd_demo3d.js')
+      if: env.JS_FOUND == 'true'
 
     - name: Upload Web WASM Artifact
       uses: actions/upload-release-asset@v1
@@ -387,4 +403,4 @@ jobs:
         asset_path: artifacts/web/avbd_demo3d.wasm
         asset_name: avbd_demo3d.wasm
         asset_content_type: application/wasm
-      if: exists('artifacts/web/avbd_demo3d.wasm')
+      if: env.WASM_FOUND == 'true'
