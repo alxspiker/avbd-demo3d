@@ -8,7 +8,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Automatically collect all source files from the "source" directory
-file(GLOB_RECURSIVE SOURCES "source/*.cpp" "source/*.h")
+file(GLOB_RECURSE SOURCES "source/*.cpp" "source/*.h")
 
 # Add Executable
 add_executable(${PROJECT_NAME} ${SOURCES})
@@ -52,7 +52,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE SDL2::SDL2 SDL2::SDL2main ${IMGUI_
 
 # Platform-Specific Configuration
 if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -s USE_SDL=2 -s USE_WEBGL2=1 -s ALLOW_MEMORY_GROWTH=1 -s SINGLE_FILE=1 -s EXPORT_NAME=avbd_demo3d -s MIN_WEBGL_VERSION=2 -s MAX_WEBGL_VERSION=2 --shell-file ${CMAKE_SOURCE_DIR}/source/shell.html")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -O3 -s USE_SDL=2 -s USE_WEBGL2=1 -s ALLOW_MEMORY_GROWTH=1 -s SINGLE_FILE=1 -s EXPORT_NAME=avbd_demo3d -s MIN_WEBGL_VERSION=2 -s MAX_WEBGL_VERSION=2 --shell-file ${CMAKE_SOURCE_DIR}/source/shell.html")
     set(CMAKE_EXECUTABLE_SUFFIX ".html")
     set(CMAKE_EXECUTABLE_NAME "avbd_demo3d")
 else()
@@ -60,8 +60,8 @@ else()
     find_package(OpenGL REQUIRED)
     find_package(GLU REQUIRED)
     
-    if(UNIX AND NOT APPLE)
-        find_package(X11 REQUIRED)
+    if (UNIX AND NOT APPLE)
+      find_package(X11 REQUIRED)
     endif()
 
     target_link_libraries(${PROJECT_NAME} PRIVATE
