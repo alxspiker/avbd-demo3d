@@ -60,7 +60,8 @@ jobs:
       shell: powershell
 
     - name: Install dependencies
-      run: vcpkg install opengl
+      # UPDATED: Added 'glad' to the list of packages to install.
+      run: vcpkg install opengl glad
 
     - name: Configure and Build
       run: |
