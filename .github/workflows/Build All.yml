@@ -32,7 +32,7 @@ jobs:
         cd build
         cmake ..
         cmake --build . --config Release --verbose
-        
+
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
@@ -47,21 +47,26 @@ jobs:
       with:
         submodules: 'recursive'
 
-    - name: Setup vcpkg
-      uses: lukka/run-vcpkg@v11
-      with:
-        # Provide a recent, stable vcpkg commit ID to avoid lookup errors
-        vcpkgGitCommitId: a0f2e0524419996d1ab757a3e7925e5104033b09
+    - name: Clone and Bootstrap vcpkg
+      run: |
+        git clone https://github.com/microsoft/vcpkg.git
+        .\vcpkg\bootstrap-vcpkg.bat
+      shell: powershell
+
+    - name: Set VCPKG_ROOT and add to PATH
+      run: |
+        echo "VCPKG_ROOT=${{ github.workspace }}\vcpkg" >> $env:GITHUB_ENV
+        echo "${{ github.workspace }}\vcpkg" >> $env:GITHUB_PATH
+      shell: powershell
 
     - name: Install dependencies
       run: vcpkg install sdl2 opengl glu
 
     - name: Configure and Build
-      shell: cmd
       run: |
         mkdir build
         cd build
-        cmake .. -DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT%/scripts/buildsystems/vcpkg.cmake
+        cmake .. -DCMAKE_TOOLCHAIN_FILE=${{ env.VCPKG_ROOT }}\scripts\buildsystems\vcpkg.cmake
         cmake --build . --config Release --verbose
 
     - name: Upload Artifact
