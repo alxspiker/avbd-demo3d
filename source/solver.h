@@ -7,15 +7,7 @@
 #pragma once
 
 #ifdef _WIN32
-#ifndef APIENTRY
-#define APIENTRY __stdcall
-#endif
-#ifndef WINGDIAPI
-#define WINGDIAPI __declspec(dllimport)
-#endif
-#ifndef GLAPI
-#define GLAPI WINGDIAPI
-#endif
+#include <windows.h>
 #endif
 
 #include <GL/gl.h>
