@@ -18,7 +18,13 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential libgl1-mesa-dev libglu1-mesa-dev libx11-dev
+        sudo apt-get install -y \
+          build-essential \
+          libgl1-mesa-dev \
+          libglu1-mesa-dev \
+          libx11-dev \
+          libxext-dev \
+          libasound2-dev
 
     - name: Configure CMake
       run: cmake -S . -B build
@@ -46,8 +52,7 @@ jobs:
         vcpkgGitCommitId: '9d3d5e89d17d083106511394a55787606362d8e4'
 
     - name: Install dependencies with vcpkg
-      run: |
-        vcpkg install sdl2 opengl glu --triplet x64-windows
+      run: vcpkg install sdl2[core,x11] opengl glu --triplet x64-windows
 
     - name: Configure CMake
       run: >
@@ -72,7 +77,7 @@ jobs:
         submodules: 'recursive'
 
     - name: Install dependencies
-      run: brew install sdl2
+      run: brew install sdl2 pkg-config
 
     - name: Configure CMake
       run: cmake -S . -B build
@@ -114,6 +119,6 @@ jobs:
       with:
         name: web-build
         path: |
-          build/index.html
-          build/index.js
-          build/index.wasm
+          build/avbd_demo3d.html
+          build/avbd_demo3d.js
+          build/avbd_demo3d.wasm
