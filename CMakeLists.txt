@@ -3,23 +3,22 @@ cmake_minimum_required(VERSION 3.13)
 # Project Name
 project(avbd_demo3d)
 
+# Add platform-specific definitions for Windows to prevent header conflicts
+if(WIN32)
+    add_definitions(-DWIN32_LEAN_AND_MEAN -DNOMINMAX)
+endif()
+
 # Set C++ Standard
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Automatically collect all source files from the "source" directory
-file(GLOB_RECURSE SOURCES "source/*.cpp" "source/*.h")
+file(GLOB_RECURSIVE SOURCES "source/*.cpp" "source/*.h")
 
 # Add Executable
 add_executable(${PROJECT_NAME} ${SOURCES})
 
-# Add platform-specific definitions for Windows to prevent header conflicts
-if(WIN32)
-    add_definitions(-DWIN32_LEAN_AND_MEAN -DNOMINMAX)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-endif()
-
-# Include SDL2
+# Include SDL2 first (ImGui needs it)
 add_subdirectory(external/SDL)
 
 # Add ImGui as a separate project
@@ -52,7 +51,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE SDL2::SDL2 SDL2::SDL2main ${IMGUI_
 
 # Platform-Specific Configuration
 if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -O3 -s USE_SDL=2 -s USE_WEBGL2=1 -s ALLOW_MEMORY_GROWTH=1 -s SINGLE_FILE=1 -s EXPORT_NAME=avbd_demo3d -s MIN_WEBGL_VERSION=2 -s MAX_WEBGL_VERSION=2 --shell-file ${CMAKE_SOURCE_DIR}/source/shell.html")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -s USE_SDL=2 -s USE_WEBGL2=1 -s ALLOW_MEMORY_GROWTH=1 -s SINGLE_FILE=1 -s EXPORT_NAME=avbd_demo3d -s MIN_WEBGL_VERSION=2 -s MAX_WEBGL_VERSION=2 --shell-file ${CMAKE_SOURCE_DIR}/source/shell.html")
     set(CMAKE_EXECUTABLE_SUFFIX ".html")
     set(CMAKE_EXECUTABLE_NAME "avbd_demo3d")
 else()
@@ -60,8 +59,8 @@ else()
     find_package(OpenGL REQUIRED)
     find_package(GLU REQUIRED)
     
-    if (UNIX AND NOT APPLE)
-      find_package(X11 REQUIRED)
+    if(UNIX AND NOT APPLE)
+        find_package(X11 REQUIRED)
     endif()
 
     target_link_libraries(${PROJECT_NAME} PRIVATE
