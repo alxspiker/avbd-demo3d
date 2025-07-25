@@ -60,15 +60,13 @@ jobs:
       shell: powershell
 
     - name: Install dependencies
-      # FIX: Removed 'glu' as it is not a standalone vcpkg package.
-      # The 'opengl' package provides the necessary find-modules for both OpenGL and GLU.
       run: vcpkg install sdl2 opengl
 
     - name: Configure and Build
       run: |
         mkdir build
         cd build
-        cmake .. -DCMAKE_TOOLCHAIN_FILE=${{ env.VCPKG_ROOT }}\scripts\buildsystems\vcpkg.cmake
+        cmake .. -DCMAKE_TOOLCHAIN_FILE=${{ env.VCPKG_ROOT }}\scripts\buildsystems\vcpkg.cmake -DCMAKE_CXX_FLAGS="-DWIN32_LEAN_AND_MEAN -DNOMINMAX"
         cmake --build . --config Release --verbose
 
     - name: Upload Artifact
