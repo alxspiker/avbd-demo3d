@@ -6,6 +6,18 @@
 
 #include <stdio.h>
 #include <stdint.h> // Required for uint32_t, etc.
+#ifdef _WIN32
+#ifndef APIENTRY
+#define APIENTRY __stdcall
+#endif
+#ifndef WINGDIAPI
+#define WINGDIAPI __declspec(dllimport)
+#endif
+#ifndef GLAPI
+#define GLAPI WINGDIAPI
+#endif
+#endif
+
 #include <GL/gl.h>
 #include <GL/glu.h>
 #include <SDL2/SDL.h>
