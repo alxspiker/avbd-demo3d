@@ -2,6 +2,7 @@
 * maths.h - 3D Math Library for AVBD Engine
 *
 * CORRECTED: Added missing operator- for mat3.
+* UPDATED: Added global operator* for float * vec3 to enable commutative scalar multiplication.
 */
 
 #pragma once
@@ -43,6 +44,9 @@ inline float length(const vec3& v) { return sqrtf(lengthSq(v)); }
 inline vec3 normalize(const vec3& v) { float len = length(v); if (len < VEC_EPSILON) return vec3(); return v / len; }
 inline vec3 cross(const vec3& a, const vec3& b) { return vec3( a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x ); }
 inline vec3 abs(const vec3& v) { return vec3(fabsf(v.x), fabsf(v.y), fabsf(v.z)); }
+
+// UPDATED: Added to allow float * vec3 (commutative with vec3 * float)
+inline vec3 operator*(float s, const vec3& v) { return v * s; }
 
 
 //------------------------------------------------------------------------------------------------

@@ -4,10 +4,30 @@
 * CORRECTED: Implements full warm-starting with feature matching,
 * static friction, and pre-computation for stabilization.
 * Drawing code is now complete.
+* UPDATED: Simplified constraint violation to reduce bounciness.
+* UPDATED: Set stiffness to FLT_MAX for hard constraints to prevent falling through.
+* UPDATED: Removed isManifold() definition (moved to solver.h).
+* UPDATED: Flip C[0] sign to make C positive for penetration, reducing bounce.
+* UPDATED: Added debug print for C[0] in computeConstraint.
+* UPDATED: Changed C[0] to -separation - margin
+* UPDATED: Added Baumgarte stabilization
+* UPDATED: Flipped vrel to vA - vB
+* UPDATED: Updated debug print with separation
+* UPDATED: Moved vrel_now calculation before normal constraint to fix compile error
+* UPDATED: Changed sign in computeDerivatives to (body == bodyA) ? -1.0f : 1.0f to push in correct direction.
+* UPDATED: Changed C[0] to max(0.0f, separation - COLLISION_MARGIN) where separation positive for penetration.
+* UPDATED: Removed Baumgarte velocity term to prevent divergence and unit mismatch.
+* UPDATED: Flipped normal to point from B to A, and adjusted separation to dot(pB - pA, normal) for positive penetration.
+* CORRECTED: Disabled friction in the position-based solver to prevent energy gain and sliding.
+* CORRECTED: Added a small penetration slop to prevent jitter from solver over-correction.
 */
 
 #include "solver.h"
 #include <float.h>
+#include <stdio.h> // For printf
+
+// A small penetration tolerance to prevent jitter from solver over-correction.
+const float PENETRATION_SLOP = 0.001f; // 1mm
 
 Manifold::Manifold(Solver* solver, Rigid* bodyA, Rigid* bodyB)
     : Force(solver, bodyA, bodyB), numContacts(0)
@@ -30,10 +50,14 @@ bool Manifold::initialize() {
     for (int i = 0; i < oldNumContacts * 3; ++i) oldLambda[i] = lambda[i];
 
     // --- Get New Contacts ---
-    // The 'false' indicates we are calling from A->B.
     numContacts = Manifold::collide(bodyA, bodyB, contacts, false);
     if (numContacts == 0) {
         return false;
+    }
+
+    // Set stiffness to FLT_MAX for hard constraints (normal and friction)
+    for (int i = 0; i < getRowCount(); ++i) {
+        stiffness[i] = FLT_MAX;
     }
 
     // --- Match New Contacts with Old for Warm Starting ---
@@ -50,7 +74,6 @@ bool Manifold::initialize() {
                 contacts[i].stick = oldContacts[j].stick;
                 
                 // For sticking contacts, reuse the exact previous contact points
-                // to prevent drift and improve static friction.
                 if(contacts[i].stick) {
                     contacts[i].rA = oldContacts[j].rA;
                     contacts[i].rB = oldContacts[j].rB;
@@ -65,8 +88,8 @@ bool Manifold::initialize() {
         vec3 world_rA = rotate(bodyA->orientation, contacts[i].rA);
         vec3 world_rB = rotate(bodyB->orientation, contacts[i].rB);
 
-        vec3 vrel = (bodyB->linearVelocity + cross(bodyB->angularVelocity, world_rB)) -
-                    (bodyA->linearVelocity + cross(bodyA->angularVelocity, world_rA));
+        vec3 vrel = (bodyA->linearVelocity + cross(bodyA->angularVelocity, world_rA)) -
+                    (bodyB->linearVelocity + cross(bodyB->angularVelocity, world_rB));
 
         vec3 normal = contacts[i].normal;
         vec3 tangent1, tangent2;
@@ -90,23 +113,34 @@ void Manifold::computeConstraint(float alpha) {
         vec3 pA = bodyA->position + world_rA;
         vec3 pB = bodyB->position + world_rB;
 
-        float penetration = dot(pA - pB, contacts[i].normal);
-        C[i*3 + 0] = penetration + contacts[i].penetration - COLLISION_MARGIN;
-
-        // --- Friction Constraints ---
-        vec3 vrel_now = (bodyB->linearVelocity + cross(bodyB->angularVelocity, world_rB)) -
-                        (bodyA->linearVelocity + cross(bodyA->angularVelocity, world_rA));
-
         vec3 normal = contacts[i].normal;
-        vec3 tangent1, tangent2;
-        if (abs(normal.x) > 0.9f) tangent1 = normalize(cross(normal, vec3(0, 1, 0)));
-        else tangent1 = normalize(cross(normal, vec3(1, 0, 0)));
-        tangent2 = normalize(cross(normal, tangent1));
-
-        C[i*3 + 1] = dot(vrel_now, tangent1) * solver->dt - contacts[i].C0_t.x * alpha * solver->dt;
-        C[i*3 + 2] = dot(vrel_now, tangent2) * solver->dt - contacts[i].C0_t.y * alpha * solver->dt;
         
-        // --- Update Force Limits for Friction Cone ---
+        // UPDATED: separation positive for penetration with flipped normal
+        float separation = dot(pB - pA, normal); 
+        
+        // --- FIX ---
+        // The aggressive `max(0.0f, separation)` caused jitter due to over-correction.
+        // By subtracting a tiny, invisible slop, we give the solver a tolerance.
+        // It will only try to correct penetrations deeper than the slop, which
+        // allows objects to come to a stable rest and stops the jitter cycle.
+        C[i*3 + 0] = max(0.0f, separation - PENETRATION_SLOP);
+
+        // The debug print is helpful, leave it in to verify the fix.
+        printf("Constraint C[0]: %f (separation %f)\n", C[i*3 + 0], separation);
+
+        // --- FIX ---
+        // The position-based solver was incorrectly trying to resolve friction (a velocity
+        // phenomenon) by applying positional corrections. This mismatch of units created a
+        // feedback loop that injected energy, causing both the accelerating slide and the
+        // bouncing from the post-stabilization step.
+        //
+        // By setting the tangential constraint violations to zero, we disable friction
+        // in the position-based loop. All friction is now correctly and stably handled
+        // by the dedicated velocity-impulse solver at the end of the Solver::step() function.
+        C[i*3 + 1] = 0.0f;
+        C[i*3 + 2] = 0.0f;
+        
+        // --- Update Force Limits for Friction Cone (No changes needed here) ---
         float friction_limit = combinedFriction * abs(lambda[i*3 + 0]);
         fmin[i*3 + 1] = -friction_limit;
         fmax[i*3 + 1] =  friction_limit;
@@ -115,11 +149,12 @@ void Manifold::computeConstraint(float alpha) {
         fmin[i*3 + 0] = 0;
         fmax[i*3 + 0] = FLT_MAX;
         
-        // --- Sticking Logic ---
+        // --- Sticking Logic (No changes needed here) ---
         float tangent_lambda = sqrtf(lambda[i*3+1]*lambda[i*3+1] + lambda[i*3+2]*lambda[i*3+2]);
         contacts[i].stick = tangent_lambda < friction_limit && length(contacts[i].C0_t) < STICK_THRESH;
     }
 }
+
 
 void Manifold::computeDerivatives(vec3& J_linear, vec3& J_angular, const Rigid* body, int row) const {
     int contact_idx = row / 3;
@@ -139,7 +174,7 @@ void Manifold::computeDerivatives(vec3& J_linear, vec3& J_angular, const Rigid* 
     else if (constraint_type == 1) basis = tangent1;
     else basis = tangent2;
     
-    float sign = (body == bodyA) ? 1.0f : -1.0f;
+    float sign = (body == bodyA) ? -1.0f : 1.0f; // Push bodyA up, bodyB down
     
     J_linear = basis * sign;
     J_angular = cross(world_r, basis) * sign;

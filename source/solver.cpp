@@ -2,11 +2,20 @@
 * solver.cpp - 3D AVBD Physics Engine
 *
 * CORRECTED: Added 'std::' for isfinite and fixed primal update logic.
+* UPDATED: Increased iterations to 50, beta to 1e7 in defaultParams.
+* UPDATED: Set alpha =0.0f to reduce bounce by disabling lambda warmstart.
+* UPDATED: Increased beta to 1e8 and iterations to 100 for stronger constraint enforcement.
+* UPDATED: Set beta to 1e6f and iterations to 50 for balance.
+* UPDATED: Added velocity solve for restitution 0 to prevent bouncing.
+* CORRECTED: Implemented friction impulses in the final velocity solve stage to prevent sliding.
+* CORRECTED: Set velocity solve to be non-iterative to prevent energy gain.
+* CORRECTED: Disabled postStabilize by default to prevent conflicts with other stabilization.
 */
 
 #include "solver.h"
 #include <vector>
 #include <cmath> // For std::isfinite
+#include <stdio.h> // For printf
 
 // Helper structures for the 6-DOF solver
 struct vec6 { vec3 l; vec3 a; };
@@ -35,10 +44,13 @@ void Solver::clear() {
 void Solver::defaultParams() {
     dt = 1.0f / 60.0f;
     gravity = {0.0f, -9.81f, 0.0f};
-    iterations = 10;
-    beta = 10000.0f;
-    alpha = 0.2f;
-    gamma = 0.9f;
+    iterations = 50;
+    beta = 1000000.0f; // 1e6f
+    alpha = 0.0f;
+    gamma = 0.5f;
+    // Disabled by default. The `postStabilize` pass is an aggressive position-based
+    // correction that fights with the slop and the final velocity solve, causing
+    // jitter and bouncing. The other stabilization methods are now sufficient.
     postStabilize = false;
 }
 
@@ -49,6 +61,7 @@ void Solver::step() {
             vec3 dp = bodyA->position - bodyB->position;
             float r = bodyA->radius + bodyB->radius;
             if (dot(dp, dp) <= r * r && !bodyA->isConstrainedTo(bodyB)) {
+                printf("Broadphase hit: bodies at y=%f and y=%f\n", bodyA->position.y, bodyB->position.y);
                 new Manifold(this, bodyA, bodyB);
             }
         }
@@ -57,6 +70,9 @@ void Solver::step() {
     // --- 2. Initialize and Warmstart Forces ---
     for (Force* force = forces; force != 0; ) {
         if (!force->initialize()) {
+            if (force->isManifold()) {
+                printf("Manifold discarded: no contacts\n");
+            }
             Force* next = force->next;
             delete force;
             force = next;
@@ -74,6 +90,16 @@ void Solver::step() {
         }
     }
     
+    // Debug print number of manifolds and contacts
+    int manifoldCount = 0;
+    for (Force* f = forces; f != 0; f = f->next) {
+        if (f->isManifold()) {
+            manifoldCount++;
+            printf("Manifold with %d contacts\n", f->getRowCount() / 3);
+        }
+    }
+    printf("Total manifolds: %d\n", manifoldCount);
+    
     // --- 3. Predict Body States ---
     for (Rigid* body = bodies; body != 0; body = body->next) {
         body->initialPosition = body->position;
@@ -89,7 +115,7 @@ void Solver::step() {
             vec3 accel = (body->linearVelocity - body->prevLinearVelocity) / dt;
             float accelExt = dot(accel, normalize(gravity));
             float accelWeight = clamp(accelExt / length(gravity), 0.0f, 1.0f);
-            if (!std::isfinite(accelWeight)) accelWeight = 0.0f; // CORRECTED
+            if (!std::isfinite(accelWeight)) accelWeight = 0.0f;
 
             // Update current state to warm-started prediction
             body->position += body->linearVelocity * dt + gravity * (accelWeight * dt * dt);
@@ -110,7 +136,7 @@ void Solver::step() {
             if (body->invMass <= 0) continue;
 
             mat3 M = mat3::diagonal(body->mass);
-            mat3 I_world = transpose(body->getInvInertiaTensorWorld()); // get I, not I^-1
+            mat3 I_world = transpose(body->getInvInertiaTensorWorld());
 
             mat66 lhs = {};
             vec6 rhs = {};
@@ -157,7 +183,7 @@ void Solver::step() {
             for (Force* force = forces; force != 0; force = force->next) {
                 force->computeConstraint(currentAlpha);
                 for (int i = 0; i < force->getRowCount(); ++i) {
-                    if(force->stiffness[i] != FLT_MAX) continue;
+                    if (force->stiffness[i] != FLT_MAX) continue;
                     float lambda_i = clamp(force->penalty[i] * force->C[i] + force->lambda[i], force->fmin[i], force->fmax[i]);
                     force->lambda[i] = lambda_i;
                     if (force->lambda[i] > force->fmin[i] && force->lambda[i] < force->fmax[i]) {
@@ -178,6 +204,97 @@ void Solver::step() {
         quat delta_q = body->orientation * conjugate(body->initialOrientation);
         body->angularVelocity = vec3(delta_q.x, delta_q.y, delta_q.z) * (2.0f / dt);
         if (delta_q.w < 0) body->angularVelocity = -body->angularVelocity;
+    }
+
+    // --- 6. Velocity Solve for Restitution (e=0) ---
+    // --- FIX ---
+    // The previous iterative velocity solve (vel_iterations = 10) was incorrectly
+    // applying a full corrective impulse in every iteration without accumulating the
+    // results. This created a positive feedback loop that injected massive amounts
+    // of energy, causing bouncing and accelerating sliding. A single, non-iterative
+    // pass is the correct approach for this type of post-correction step.
+    const int vel_iterations = 1;
+    for (int vel_it = 0; vel_it < vel_iterations; ++vel_it) { // This loop now effectively runs only once
+        for (Force* force = forces; force; force = force->next) {
+            if (!force->isManifold()) continue;
+            Manifold* m = (Manifold*)force;
+            for (int i = 0; i < m->numContacts; ++i) {
+                const Manifold::Contact& c = m->contacts[i];
+                vec3 world_rA = rotate(m->bodyA->orientation, c.rA);
+                vec3 world_rB = rotate(m->bodyB->orientation, c.rB);
+                vec3 v_rel = (m->bodyA->linearVelocity + cross(m->bodyA->angularVelocity, world_rA)) -
+                             (m->bodyB->linearVelocity + cross(m->bodyB->angularVelocity, world_rB));
+                vec3 n = c.normal;
+                float v_n = dot(v_rel, n);
+                if (v_n >= 0) continue; // separating
+
+                // Compute effective mass for normal
+                vec3 Ia_n = m->bodyA->getInvInertiaTensorWorld() * cross(world_rA, n);
+                float qa = dot(cross(Ia_n, world_rA), n);
+                vec3 Ib_n = m->bodyB->getInvInertiaTensorWorld() * cross(world_rB, n);
+                float qb = dot(cross(Ib_n, world_rB), n);
+                float em = m->bodyA->invMass + m->bodyB->invMass + qa + qb;
+                if (em <= 0) continue;
+
+                float e = 0.0f;
+                float j = - (1.0f + e) * v_n / em;
+
+                vec3 impulse = j * n;
+
+                if (m->bodyA->invMass > 0) {
+                    m->bodyA->linearVelocity += m->bodyA->invMass * impulse;
+                    m->bodyA->angularVelocity += m->bodyA->getInvInertiaTensorWorld() * cross(world_rA, impulse);
+                }
+
+                if (m->bodyB->invMass > 0) {
+                    m->bodyB->linearVelocity -= m->bodyB->invMass * impulse;
+                    m->bodyB->angularVelocity -= m->bodyB->getInvInertiaTensorWorld() * cross(world_rB, impulse);
+                }
+
+                // --- FIX: Implement Friction Impulse ---
+                // Re-calculate relative velocity after normal impulse
+                v_rel = (m->bodyA->linearVelocity + cross(m->bodyA->angularVelocity, world_rA)) -
+                        (m->bodyB->linearVelocity + cross(m->bodyB->angularVelocity, world_rB));
+
+                // Create tangent vectors
+                vec3 tangent1, tangent2;
+                if (abs(n.x) > 0.9f) tangent1 = normalize(cross(n, vec3(0, 1, 0)));
+                else tangent1 = normalize(cross(n, vec3(1, 0, 0)));
+                tangent2 = normalize(cross(n, tangent1));
+
+                // Calculate effective mass for tangent 1
+                vec3 Ia_t1 = m->bodyA->getInvInertiaTensorWorld() * cross(world_rA, tangent1);
+                float qa_t1 = dot(cross(Ia_t1, world_rA), tangent1);
+                vec3 Ib_t1 = m->bodyB->getInvInertiaTensorWorld() * cross(world_rB, tangent1);
+                float qb_t1 = dot(cross(Ib_t1, world_rB), tangent1);
+                float em_t1 = m->bodyA->invMass + m->bodyB->invMass + qa_t1 + qb_t1;
+                
+                // Calculate effective mass for tangent 2
+                vec3 Ia_t2 = m->bodyA->getInvInertiaTensorWorld() * cross(world_rA, tangent2);
+                float qa_t2 = dot(cross(Ia_t2, world_rA), tangent2);
+                vec3 Ib_t2 = m->bodyB->getInvInertiaTensorWorld() * cross(world_rB, tangent2);
+                float qb_t2 = dot(cross(Ib_t2, world_rB), tangent2);
+                float em_t2 = m->bodyA->invMass + m->bodyB->invMass + qa_t2 + qb_t2;
+
+                // Calculate friction impulse in each tangent direction
+                float jt1 = (em_t1 > 0) ? -dot(v_rel, tangent1) / em_t1 : 0.0f;
+                float jt2 = (em_t2 > 0) ? -dot(v_rel, tangent2) / em_t2 : 0.0f;
+
+                // Clamp to friction cone
+                float friction_limit = m->combinedFriction * j;
+                float tangent_impulse_mag = sqrtf(jt1 * jt1 + jt2 * jt2);
+                if (tangent_impulse_mag > friction_limit) {
+                    float scale = friction_limit / tangent_impulse_mag;
+                    jt1 *= scale;
+                    jt2 *= scale;
+                }
+
+                // Apply friction impulse
+                vec3 friction_impulse = tangent1 * jt1 + tangent2 * jt2;
+                if (m->bodyA->invMass > 0) { m->bodyA->linearVelocity += m->bodyA->invMass * friction_impulse; m->bodyA->angularVelocity += m->bodyA->getInvInertiaTensorWorld() * cross(world_rA, friction_impulse); }
+                if (m->bodyB->invMass > 0) { m->bodyB->linearVelocity -= m->bodyB->invMass * friction_impulse; m->bodyB->angularVelocity -= m->bodyB->getInvInertiaTensorWorld() * cross(world_rB, friction_impulse); }
+            }
+        }
     }
 }
 

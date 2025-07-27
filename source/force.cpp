@@ -3,6 +3,7 @@
 *
 * Implements the base Force class constructor and destructor, which handle
 * the management of the solver's and bodies' linked lists for constraints.
+* UPDATED: Added isManifold virtual method.
 */
 
 #include "solver.h"

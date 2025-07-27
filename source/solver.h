@@ -2,6 +2,8 @@
 * solver.h - 3D AVBD Physics Engine
 *
 * CORRECTED: Replaced includes with forward declarations to break circular dependencies.
+* UPDATED: Reverted COLLISION_MARGIN to 0.02f to stabilize contact detection.
+* UPDATED: Added isManifold() declaration to Manifold struct.
 */
 
 #pragma once
@@ -27,7 +29,6 @@
 #define SHOW_CONTACTS true
 
 // --- Forward Declarations ---
-// This is the key change to fix the compile errors.
 struct Rigid;
 struct Force;
 struct Manifold;
@@ -89,6 +90,7 @@ struct Force {
     virtual void computeConstraint(float alpha) = 0;
     virtual void computeDerivatives(vec3& J_linear, vec3& J_angular, const Rigid* body, int row) const = 0;
     virtual void draw() const {}
+    virtual bool isManifold() const { return false; }
 };
 
 // Collision manifold between two bodies.
@@ -115,6 +117,7 @@ struct Manifold : Force {
     void computeDerivatives(vec3& J_linear, vec3& J_angular, const Rigid* body, int row) const override;
     void draw() const override;
     static int collide(Rigid* bodyA, Rigid* bodyB, Contact* contacts, bool flip);
+    bool isManifold() const override { return true; } // UPDATED: Added declaration
 };
 
 // The core solver class.
