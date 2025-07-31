@@ -104,7 +104,7 @@ struct Manifold : Force {
         vec3 rA, rB;
         vec3 normal;
         float penetration;
-        float C0_n;  // Precomputed normal constraint violation at frame start
+        float C0_n;  // Stores the initial normal constraint violation for the Taylor series approximation used in stabilization
         vec3 C0_t;
         bool stick;
     };
