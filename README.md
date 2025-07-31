@@ -9,8 +9,8 @@
 Test the latest version here: [**Live Web Demo**](https://github.com/alxspiker/avbd-demo3d/releases/tag/prerelease)
 
 <p align="center">
-  <a href="https://www.youtube.com/watch?v=soUKf1JE-40">
-    <img src="https://img.youtube.com/vi/soUKf1JE-40/0.jpg" alt="AVBD Demo 3D in Action" width="720">
+  <a href="https://www.youtube.com/watch?v=lBtpCrjKPBQ">
+    <img src="https://img.youtube.com/vi/lBtpCrjKPBQ/0.jpg" alt="AVBD Demo 3D in Action" width="720">
     <br>
     <em><strong>Watch the 3D physics engine in action!</strong></em>
   </a>
