@@ -44,10 +44,10 @@ void Solver::clear() {
 void Solver::defaultParams() {
     dt = 1.0f / 60.0f;
     gravity = {0.0f, -9.81f, 0.0f};
-    iterations = 50; // Increased back - need more iterations for stability
-    beta = 100000.0f; // Increased penalty scaling for stronger constraint enforcement  
-    alpha = 0.8f; // Re-enabled warm starting for better convergence
-    gamma = 0.9f; // Increased gamma for better penalty retention
+    iterations = 100; // Dramatically increase iterations
+    beta = 1000000.0f; // Much stronger penalty scaling  
+    alpha = 0.9f; // Strong warm starting for better convergence
+    gamma = 0.95f; // High penalty retention
     // Disabled by default. The `postStabilize` pass is an aggressive position-based
     // correction that fights with the slop and the final velocity solve, causing
     // jitter and bouncing. The other stabilization methods are now sufficient.

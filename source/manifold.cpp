@@ -115,21 +115,28 @@ void Manifold::computeConstraint(float alpha) {
 
         vec3 normal = contacts[i].normal;
         
-        // UPDATED: Calculate current separation from contact points
-        float separation = dot(pB - pA, normal); 
-        
         // --- FIX ---
         // Use stored penetration depth for robust constraint formulation
-        // When objects are penetrating, we want a negative constraint violation
-        // The constraint should be: C = min(0, current_separation - slop)
-        // This ensures we get negative values (violations) when penetrating
+        // The constraint represents the signed distance: negative = violation, positive/zero = satisfied
+        // Since penetration depth is stored as positive when overlapping, we negate it for the constraint
         float penetration_depth = contacts[i].penetration;
-        if (separation < PENETRATION_SLOP) {
-            // Objects are penetrating or very close - use negative constraint
-            C[i*3 + 0] = separation - PENETRATION_SLOP;
-        } else {
-            // Objects are sufficiently separated - no constraint violation
-            C[i*3 + 0] = 0.0f;
+        
+        // Calculate current separation for verification, but use stored penetration as primary
+        float current_separation = dot(pB - pA, normal); 
+        
+        // Use the more conservative (worse) constraint value between stored and current
+        float constraint_from_stored = -penetration_depth + PENETRATION_SLOP;
+        float constraint_from_current = current_separation - PENETRATION_SLOP;
+        
+        // Take the minimum (most violated) constraint
+        C[i*3 + 0] = min(0.0f, min(constraint_from_stored, constraint_from_current));
+        
+        // Debug output for first few frames to verify constraint calculation
+        static int debug_count = 0;
+        if (debug_count < 20) {
+            printf("Contact %d: penetration=%.4f, current_sep=%.4f, constraint=%.4f\n", 
+                   i, penetration_depth, current_separation, C[i*3 + 0]);
+            debug_count++;
         }
 
         // --- FIX ---
