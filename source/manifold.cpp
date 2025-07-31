@@ -117,26 +117,14 @@ void Manifold::computeConstraint(float alpha) {
         
         // --- FIX ---
         // Use stored penetration depth for robust constraint formulation
-        // The constraint represents the signed distance: negative = violation, positive/zero = satisfied
-        // Since penetration depth is stored as positive when overlapping, we negate it for the constraint
-        float penetration_depth = contacts[i].penetration;
+        // Calculate separation distance (positive when separated, negative when penetrating)
+        float separation = dot(pB - pA, normal); 
         
-        // Calculate current separation for verification, but use stored penetration as primary
-        float current_separation = dot(pB - pA, normal); 
-        
-        // Use the more conservative (worse) constraint value between stored and current
-        float constraint_from_stored = -penetration_depth + PENETRATION_SLOP;
-        float constraint_from_current = current_separation - PENETRATION_SLOP;
-        
-        // Take the minimum (most violated) constraint
-        C[i*3 + 0] = min(0.0f, min(constraint_from_stored, constraint_from_current));
-        
-        // Debug output for first few frames to verify constraint calculation
-        static int debug_count = 0;
-        if (debug_count < 50) {
-            printf("Contact %d: penetration=%.4f, current_sep=%.4f, constraint=%.4f, normal=(%.2f,%.2f,%.2f)\n", 
-                   i, penetration_depth, current_separation, C[i*3 + 0], normal.x, normal.y, normal.z);
-            debug_count++;
+        // Constraint violation: only penalize when separation is less than slop (i.e., penetrating)
+        if (separation < PENETRATION_SLOP) {
+            C[i*3 + 0] = separation - PENETRATION_SLOP;
+        } else {
+            C[i*3 + 0] = 0.0f;
         }
 
         // --- FIX ---

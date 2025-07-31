@@ -43,13 +43,27 @@ void Solver::clear() {
 
 void Solver::defaultParams() {
     dt = 1.0f / 60.0f;
-    gravity = {0.0f, -9.81f, 0.0f};
-    iterations = 100; // Dramatically increase iterations
-    beta = 1000000.0f; // Much stronger penalty scaling  
-    alpha = 0.9f; // Strong warm starting for better convergence
-    gamma = 0.95f; // High penalty retention
-    // Enable position-based stabilization for deep penetration cases
-    // This aggressive correction may cause some jitter but should prevent penetration
+    gravity = {0.0f, -10.0f, 0.0f};
+    iterations = 10;
+
+    // Note: in the paper, beta is suggested to be [1, 1000]. Technically, the best choice will
+    // depend on the length, mass, and constraint function scales (ie units) of your simulation,
+    // along with your strategy for incrementing the penalty parameters.
+    // If the value is not in the right range, you may see slower convergance for complex scenes.
+    beta = 100000.0f;
+
+    // Alpha controls how much stabilization is applied. Higher values give slower and smoother
+    // error correction, and lower values are more responsive and energetic. Tune this depending
+    // on your desired constraint error response.
+    alpha = 0.99f;
+
+    // Gamma controls how much the penalty and lambda values are decayed each step during warmstarting.
+    // This should always be < 1 so that the penalty values can decrease (unless you use a different
+    // penalty parameter strategy which does not require decay).
+    gamma = 0.99f;
+
+    // Post stabilization applies an extra iteration to fix positional error.
+    // This removes the need for the alpha parameter, which can make tuning a little easier.
     postStabilize = true;
 }
 
@@ -83,19 +97,6 @@ void Solver::step() {
             }
             force = force->next;
         }
-    }
-    
-    // Debug print number of manifolds and contacts (only when there are manifolds)
-    int manifoldCount = 0;
-    int totalContacts = 0;
-    for (Force* f = forces; f != 0; f = f->next) {
-        if (f->isManifold()) {
-            manifoldCount++;
-            totalContacts += f->getRowCount() / 3;
-        }
-    }
-    if (manifoldCount > 0) {
-        printf("Frame: %d manifolds, %d contacts total\n", manifoldCount, totalContacts);
     }
     
     // --- 3. Predict Body States ---
