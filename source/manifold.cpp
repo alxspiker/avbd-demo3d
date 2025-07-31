@@ -131,12 +131,6 @@ void Manifold::computeConstraint(float alpha) {
             // Objects are sufficiently separated - no constraint violation
             C[i*3 + 0] = 0.0f;
         }
-        
-        // Debug output for constraint verification
-        if (abs(C[i*3 + 0]) > 1e-6f) {
-            printf("Contact %d: separation=%.6f, penetration=%.6f, C=%.6f\n", 
-                   i, separation, penetration_depth, C[i*3 + 0]);
-        }
 
         // --- FIX ---
         // The position-based solver was incorrectly trying to resolve friction (a velocity
