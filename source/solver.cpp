@@ -43,15 +43,28 @@ void Solver::clear() {
 
 void Solver::defaultParams() {
     dt = 1.0f / 60.0f;
-    gravity = {0.0f, -9.81f, 0.0f};
-    iterations = 50;
-    beta = 1000000.0f; // 1e6f
-    alpha = 0.0f;
-    gamma = 0.5f;
-    // Disabled by default. The `postStabilize` pass is an aggressive position-based
-    // correction that fights with the slop and the final velocity solve, causing
-    // jitter and bouncing. The other stabilization methods are now sufficient.
-    postStabilize = false;
+    gravity = {0.0f, -10.0f, 0.0f};
+    iterations = 10; // Back to 2D reference value
+
+    // Note: in the paper, beta is suggested to be [1, 1000]. Technically, the best choice will
+    // depend on the length, mass, and constraint function scales (ie units) of your simulation,
+    // along with your strategy for incrementing the penalty parameters.
+    // If the value is not in the right range, you may see slower convergance for complex scenes.
+    beta = 100000.0f; // Back to 2D reference value
+
+    // Alpha controls how much stabilization is applied. Higher values give slower and smoother
+    // error correction, and lower values are more responsive and energetic. Tune this depending
+    // on your desired constraint error response.
+    alpha = 0.99f;
+
+    // Gamma controls how much the penalty and lambda values are decayed each step during warmstarting.
+    // This should always be < 1 so that the penalty values can decrease (unless you use a different
+    // penalty parameter strategy which does not require decay).
+    gamma = 0.99f;
+
+    // Post stabilization applies an extra iteration to fix positional error.
+    // This removes the need for the alpha parameter, which can make tuning a little easier.
+    postStabilize = true;
 }
 
 void Solver::step() {
@@ -61,7 +74,6 @@ void Solver::step() {
             vec3 dp = bodyA->position - bodyB->position;
             float r = bodyA->radius + bodyB->radius;
             if (dot(dp, dp) <= r * r && !bodyA->isConstrainedTo(bodyB)) {
-                printf("Broadphase hit: bodies at y=%f and y=%f\n", bodyA->position.y, bodyB->position.y);
                 new Manifold(this, bodyA, bodyB);
             }
         }
@@ -70,9 +82,6 @@ void Solver::step() {
     // --- 2. Initialize and Warmstart Forces ---
     for (Force* force = forces; force != 0; ) {
         if (!force->initialize()) {
-            if (force->isManifold()) {
-                printf("Manifold discarded: no contacts\n");
-            }
             Force* next = force->next;
             delete force;
             force = next;
@@ -89,16 +98,6 @@ void Solver::step() {
             force = force->next;
         }
     }
-    
-    // Debug print number of manifolds and contacts
-    int manifoldCount = 0;
-    for (Force* f = forces; f != 0; f = f->next) {
-        if (f->isManifold()) {
-            manifoldCount++;
-            printf("Manifold with %d contacts\n", f->getRowCount() / 3);
-        }
-    }
-    printf("Total manifolds: %d\n", manifoldCount);
     
     // --- 3. Predict Body States ---
     for (Rigid* body = bodies; body != 0; body = body->next) {

@@ -3,3 +3,7 @@ show_code.py
 build
 external/imgui/**
 external/SDL/**
+*.o
+*.exe
+*.tmp
+*.log
