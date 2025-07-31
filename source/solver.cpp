@@ -44,10 +44,10 @@ void Solver::clear() {
 void Solver::defaultParams() {
     dt = 1.0f / 60.0f;
     gravity = {0.0f, -9.81f, 0.0f};
-    iterations = 50;
-    beta = 1000000.0f; // 1e6f
-    alpha = 0.0f;
-    gamma = 0.5f;
+    iterations = 20; // Reduced from 50 - more reasonable iteration count
+    beta = 10000.0f; // Reduced from 1e6 - less aggressive penalty scaling
+    alpha = 0.8f; // Re-enabled warm starting for better convergence
+    gamma = 0.9f; // Increased gamma for better penalty retention
     // Disabled by default. The `postStabilize` pass is an aggressive position-based
     // correction that fights with the slop and the final velocity solve, causing
     // jitter and bouncing. The other stabilization methods are now sufficient.
@@ -61,7 +61,6 @@ void Solver::step() {
             vec3 dp = bodyA->position - bodyB->position;
             float r = bodyA->radius + bodyB->radius;
             if (dot(dp, dp) <= r * r && !bodyA->isConstrainedTo(bodyB)) {
-                printf("Broadphase hit: bodies at y=%f and y=%f\n", bodyA->position.y, bodyB->position.y);
                 new Manifold(this, bodyA, bodyB);
             }
         }
@@ -70,9 +69,6 @@ void Solver::step() {
     // --- 2. Initialize and Warmstart Forces ---
     for (Force* force = forces; force != 0; ) {
         if (!force->initialize()) {
-            if (force->isManifold()) {
-                printf("Manifold discarded: no contacts\n");
-            }
             Force* next = force->next;
             delete force;
             force = next;
@@ -90,15 +86,16 @@ void Solver::step() {
         }
     }
     
-    // Debug print number of manifolds and contacts
+    // Debug print number of manifolds and contacts (only when there are manifolds)
     int manifoldCount = 0;
     for (Force* f = forces; f != 0; f = f->next) {
         if (f->isManifold()) {
             manifoldCount++;
-            printf("Manifold with %d contacts\n", f->getRowCount() / 3);
         }
     }
-    printf("Total manifolds: %d\n", manifoldCount);
+    if (manifoldCount > 0) {
+        printf("Total manifolds: %d\n", manifoldCount);
+    }
     
     // --- 3. Predict Body States ---
     for (Rigid* body = bodies; body != 0; body = body->next) {

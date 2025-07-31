@@ -119,14 +119,11 @@ void Manifold::computeConstraint(float alpha) {
         float separation = dot(pB - pA, normal); 
         
         // --- FIX ---
-        // The aggressive `max(0.0f, separation)` caused jitter due to over-correction.
-        // By subtracting a tiny, invisible slop, we give the solver a tolerance.
-        // It will only try to correct penetrations deeper than the slop, which
-        // allows objects to come to a stable rest and stops the jitter cycle.
-        C[i*3 + 0] = max(0.0f, separation - PENETRATION_SLOP);
-
-        // The debug print is helpful, leave it in to verify the fix.
-        printf("Constraint C[0]: %f (separation %f)\n", C[i*3 + 0], separation);
+        // The constraint should be negative for penetration (violation)
+        // and zero/positive for separation (satisfied constraint).
+        // We want C = -(penetration_depth) when penetrating, 0 when separated
+        // Using negative separation makes sense: negative = penetrating, positive = separated
+        C[i*3 + 0] = min(0.0f, -separation + PENETRATION_SLOP);
 
         // --- FIX ---
         // The position-based solver was incorrectly trying to resolve friction (a velocity
