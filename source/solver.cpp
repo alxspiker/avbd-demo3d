@@ -44,8 +44,8 @@ void Solver::clear() {
 void Solver::defaultParams() {
     dt = 1.0f / 60.0f;
     gravity = {0.0f, -9.81f, 0.0f};
-    iterations = 20; // Reduced from 50 - more reasonable iteration count
-    beta = 10000.0f; // Reduced from 1e6 - less aggressive penalty scaling
+    iterations = 50; // Increased back - need more iterations for stability
+    beta = 100000.0f; // Increased penalty scaling for stronger constraint enforcement  
     alpha = 0.8f; // Re-enabled warm starting for better convergence
     gamma = 0.9f; // Increased gamma for better penalty retention
     // Disabled by default. The `postStabilize` pass is an aggressive position-based

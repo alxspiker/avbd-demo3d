@@ -115,15 +115,28 @@ void Manifold::computeConstraint(float alpha) {
 
         vec3 normal = contacts[i].normal;
         
-        // UPDATED: separation positive for penetration with flipped normal
+        // UPDATED: Calculate current separation from contact points
         float separation = dot(pB - pA, normal); 
         
         // --- FIX ---
-        // The constraint should be negative for penetration (violation)
-        // and zero/positive for separation (satisfied constraint).
-        // We want C = -(penetration_depth) when penetrating, 0 when separated
-        // Using negative separation makes sense: negative = penetrating, positive = separated
-        C[i*3 + 0] = min(0.0f, -separation + PENETRATION_SLOP);
+        // Use stored penetration depth for robust constraint formulation
+        // When objects are penetrating, we want a negative constraint violation
+        // The constraint should be: C = min(0, current_separation - slop)
+        // This ensures we get negative values (violations) when penetrating
+        float penetration_depth = contacts[i].penetration;
+        if (separation < PENETRATION_SLOP) {
+            // Objects are penetrating or very close - use negative constraint
+            C[i*3 + 0] = separation - PENETRATION_SLOP;
+        } else {
+            // Objects are sufficiently separated - no constraint violation
+            C[i*3 + 0] = 0.0f;
+        }
+        
+        // Debug output for constraint verification
+        if (abs(C[i*3 + 0]) > 1e-6f) {
+            printf("Contact %d: separation=%.6f, penetration=%.6f, C=%.6f\n", 
+                   i, separation, penetration_depth, C[i*3 + 0]);
+        }
 
         // --- FIX ---
         // The position-based solver was incorrectly trying to resolve friction (a velocity
