@@ -155,12 +155,6 @@ void Manifold::computeConstraint(float alpha) {
         // --- Sticking Logic ---
         float tangent_lambda = sqrtf(lambda[i*3+1]*lambda[i*3+1] + lambda[i*3+2]*lambda[i*3+2]);
         contacts[i].stick = tangent_lambda < friction_limit && length(contacts[i].C0_t) < STICK_THRESH;
-        
-        // Debug output for first contact
-        if (i == 0) {
-            printf("DEBUG: pA=(%.3f,%.3f,%.3f) pB=(%.3f,%.3f,%.3f) separation=%.6f, C[0]=%.6f\n", 
-                   pA.x, pA.y, pA.z, pB.x, pB.y, pB.z, separation, C[i*3 + 0]);
-        }
     }
 }
 

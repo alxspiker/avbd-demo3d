@@ -10,6 +10,7 @@
 #include <vector>
 #include <algorithm>
 #include <cmath> // For fabsf
+#include <cstdio> // For printf
 
 // --- Helper Functions for 3D Clipping ---
 
@@ -130,6 +131,14 @@ int Manifold::collide(Rigid* bodyA, Rigid* bodyB, Contact* contacts, bool flip) 
         }
     }
 
+    // For face-face contacts, prefer the larger/static object as reference
+    // This ensures contact points are placed on the more stable surface
+    if (bestAxis < 6) { // Face-face contact
+        if (bodyB->invMass == 0.0f || (bodyA->invMass > 0.0f && length(bodyB->size) > length(bodyA->size))) {
+            A_is_ref = false; // Use bodyB (ground) as reference
+        }
+    }
+    
     Rigid *refBody = A_is_ref ? bodyA : bodyB;
     Rigid *incBody = A_is_ref ? bodyB : bodyA;
 
