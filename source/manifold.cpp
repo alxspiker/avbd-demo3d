@@ -133,9 +133,9 @@ void Manifold::computeConstraint(float alpha) {
         
         // Debug output for first few frames to verify constraint calculation
         static int debug_count = 0;
-        if (debug_count < 20) {
-            printf("Contact %d: penetration=%.4f, current_sep=%.4f, constraint=%.4f\n", 
-                   i, penetration_depth, current_separation, C[i*3 + 0]);
+        if (debug_count < 50) {
+            printf("Contact %d: penetration=%.4f, current_sep=%.4f, constraint=%.4f, normal=(%.2f,%.2f,%.2f)\n", 
+                   i, penetration_depth, current_separation, C[i*3 + 0], normal.x, normal.y, normal.z);
             debug_count++;
         }
 

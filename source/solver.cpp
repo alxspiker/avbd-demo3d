@@ -48,10 +48,9 @@ void Solver::defaultParams() {
     beta = 1000000.0f; // Much stronger penalty scaling  
     alpha = 0.9f; // Strong warm starting for better convergence
     gamma = 0.95f; // High penalty retention
-    // Disabled by default. The `postStabilize` pass is an aggressive position-based
-    // correction that fights with the slop and the final velocity solve, causing
-    // jitter and bouncing. The other stabilization methods are now sufficient.
-    postStabilize = false;
+    // Enable position-based stabilization for deep penetration cases
+    // This aggressive correction may cause some jitter but should prevent penetration
+    postStabilize = true;
 }
 
 void Solver::step() {
@@ -88,13 +87,15 @@ void Solver::step() {
     
     // Debug print number of manifolds and contacts (only when there are manifolds)
     int manifoldCount = 0;
+    int totalContacts = 0;
     for (Force* f = forces; f != 0; f = f->next) {
         if (f->isManifold()) {
             manifoldCount++;
+            totalContacts += f->getRowCount() / 3;
         }
     }
     if (manifoldCount > 0) {
-        printf("Total manifolds: %d\n", manifoldCount);
+        printf("Frame: %d manifolds, %d contacts total\n", manifoldCount, totalContacts);
     }
     
     // --- 3. Predict Body States ---
