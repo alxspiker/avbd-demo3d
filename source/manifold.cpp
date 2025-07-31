@@ -33,6 +33,10 @@ Manifold::Manifold(Solver* solver, Rigid* bodyA, Rigid* bodyB)
     : Force(solver, bodyA, bodyB), numContacts(0)
 {
     // The constructor is minimal, all work is done in initialize
+    for (int i = 0; i < 4; ++i) {
+        contacts[i].C0_n = 0.0f;
+        contacts[i].C0_t = vec3{0, 0, 0};
+    }
 }
 
 int Manifold::getRowCount() const {
@@ -83,15 +87,24 @@ bool Manifold::initialize() {
         }
     }
 
-    // --- Pre-computation for Stabilization ---
+    // --- Pre-computation for Taylor Series Approximation (following 2D reference) ---
     for (int i = 0; i < numContacts; ++i) {
         vec3 world_rA = rotate(bodyA->orientation, contacts[i].rA);
         vec3 world_rB = rotate(bodyB->orientation, contacts[i].rB);
-
+        
+        vec3 pA = bodyA->position + world_rA;
+        vec3 pB = bodyB->position + world_rB;
+        vec3 normal = contacts[i].normal;
+        
+        // Precompute C0 - the constraint violation at the beginning of this frame
+        // Following 2D: C0 = basis * (pA - pB) + collision_margin
+        // Use the stored penetration depth from collision detection
+        contacts[i].C0_n = -contacts[i].penetration + PENETRATION_SLOP; // Negative because penetration is positive when objects overlap
+        
+        // For tangent directions (friction) - compute relative velocity projected onto tangent
         vec3 vrel = (bodyA->linearVelocity + cross(bodyA->angularVelocity, world_rA)) -
                     (bodyB->linearVelocity + cross(bodyB->angularVelocity, world_rB));
 
-        vec3 normal = contacts[i].normal;
         vec3 tangent1, tangent2;
         if (abs(normal.x) > 0.9f) tangent1 = normalize(cross(normal, vec3(0, 1, 0)));
         else tangent1 = normalize(cross(normal, vec3(1, 0, 0)));
@@ -107,39 +120,30 @@ bool Manifold::initialize() {
 
 void Manifold::computeConstraint(float alpha) {
     for (int i = 0; i < numContacts; ++i) {
-        // --- Normal Constraint (Penetration) ---
+        // --- Simple, Direct Constraint Calculation ---
+        // Goal: C = 0 when objects are just touching, C < 0 when penetrating
+        
         vec3 world_rA = rotate(bodyA->orientation, contacts[i].rA);
         vec3 world_rB = rotate(bodyB->orientation, contacts[i].rB);
         vec3 pA = bodyA->position + world_rA;
         vec3 pB = bodyB->position + world_rB;
-
         vec3 normal = contacts[i].normal;
         
-        // --- FIX ---
-        // Use stored penetration depth for robust constraint formulation
-        // Calculate separation distance (positive when separated, negative when penetrating)
-        float separation = dot(pB - pA, normal); 
+        // Compute separation distance along normal
+        // If normal points from B to A, then dot(pA - pB, normal) is positive when separated
+        float separation = dot(pA - pB, normal);
         
-        // Constraint violation: only penalize when separation is less than slop (i.e., penetrating)
-        if (separation < PENETRATION_SLOP) {
-            C[i*3 + 0] = separation - PENETRATION_SLOP;
-        } else {
-            C[i*3 + 0] = 0.0f;
-        }
-
-        // --- FIX ---
-        // The position-based solver was incorrectly trying to resolve friction (a velocity
-        // phenomenon) by applying positional corrections. This mismatch of units created a
-        // feedback loop that injected energy, causing both the accelerating slide and the
-        // bouncing from the post-stabilization step.
-        //
-        // By setting the tangential constraint violations to zero, we disable friction
-        // in the position-based loop. All friction is now correctly and stably handled
-        // by the dedicated velocity-impulse solver at the end of the Solver::step() function.
+        // Constraint: we want separation >= PENETRATION_SLOP
+        // So C = separation - PENETRATION_SLOP
+        // When C < 0, objects are too close (violating constraint)
+        // When C >= 0, objects are properly separated (satisfying constraint)
+        C[i*3 + 0] = separation - PENETRATION_SLOP;
+        
+        // Disable friction in position solver
         C[i*3 + 1] = 0.0f;
         C[i*3 + 2] = 0.0f;
         
-        // --- Update Force Limits for Friction Cone (No changes needed here) ---
+        // --- Update Force Limits for Friction Cone ---
         float friction_limit = combinedFriction * abs(lambda[i*3 + 0]);
         fmin[i*3 + 1] = -friction_limit;
         fmax[i*3 + 1] =  friction_limit;
@@ -148,9 +152,15 @@ void Manifold::computeConstraint(float alpha) {
         fmin[i*3 + 0] = 0;
         fmax[i*3 + 0] = FLT_MAX;
         
-        // --- Sticking Logic (No changes needed here) ---
+        // --- Sticking Logic ---
         float tangent_lambda = sqrtf(lambda[i*3+1]*lambda[i*3+1] + lambda[i*3+2]*lambda[i*3+2]);
         contacts[i].stick = tangent_lambda < friction_limit && length(contacts[i].C0_t) < STICK_THRESH;
+        
+        // Debug output for first contact
+        if (i == 0) {
+            printf("DEBUG: pA=(%.3f,%.3f,%.3f) pB=(%.3f,%.3f,%.3f) separation=%.6f, C[0]=%.6f\n", 
+                   pA.x, pA.y, pA.z, pB.x, pB.y, pB.z, separation, C[i*3 + 0]);
+        }
     }
 }
 
@@ -173,7 +183,7 @@ void Manifold::computeDerivatives(vec3& J_linear, vec3& J_angular, const Rigid* 
     else if (constraint_type == 1) basis = tangent1;
     else basis = tangent2;
     
-    float sign = (body == bodyA) ? -1.0f : 1.0f; // Push bodyA up, bodyB down
+    float sign = (body == bodyA) ? 1.0f : -1.0f; // Follow 2D reference: +normal for A, -normal for B
     
     J_linear = basis * sign;
     J_angular = cross(world_r, basis) * sign;

@@ -104,6 +104,7 @@ struct Manifold : Force {
         vec3 rA, rB;
         vec3 normal;
         float penetration;
+        float C0_n;  // Precomputed normal constraint violation at frame start
         vec3 C0_t;
         bool stick;
     };
