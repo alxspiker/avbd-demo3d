@@ -149,8 +149,8 @@ void Manifold::computeConstraint(float alpha) {
         fmax[i*3 + 1] =  friction_limit;
         fmin[i*3 + 2] = -friction_limit;
         fmax[i*3 + 2] =  friction_limit;
-        fmin[i*3 + 0] = 0;
-        fmax[i*3 + 0] = FLT_MAX;
+        fmin[i*3 + 0] = -FLT_MAX; // Allow negative forces (pushing apart)
+        fmax[i*3 + 0] = 0;       // Prevent positive forces (pulling together)
         
         // --- Sticking Logic ---
         float tangent_lambda = sqrtf(lambda[i*3+1]*lambda[i*3+1] + lambda[i*3+2]*lambda[i*3+2]);

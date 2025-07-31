@@ -44,13 +44,13 @@ void Solver::clear() {
 void Solver::defaultParams() {
     dt = 1.0f / 60.0f;
     gravity = {0.0f, -10.0f, 0.0f};
-    iterations = 10;
+    iterations = 10; // Back to 2D reference value
 
     // Note: in the paper, beta is suggested to be [1, 1000]. Technically, the best choice will
     // depend on the length, mass, and constraint function scales (ie units) of your simulation,
     // along with your strategy for incrementing the penalty parameters.
     // If the value is not in the right range, you may see slower convergance for complex scenes.
-    beta = 100000.0f;
+    beta = 100000.0f; // Back to 2D reference value
 
     // Alpha controls how much stabilization is applied. Higher values give slower and smoother
     // error correction, and lower values are more responsive and energetic. Tune this depending
