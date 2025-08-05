@@ -208,7 +208,17 @@ int main(int argc, char** argv) {
         printf("Running in headless mode: scene '%s', steps=%d\n", sceneNames[sceneIdx], steps);
         for (int step = 0; step < steps; ++step) {
             solver->step();
-            printf("Step %d:\n", step);
+            
+            // Count manifolds and contacts for debugging
+            int manifolds = 0, contacts = 0;
+            for (Force* f = solver->forces; f; f = f->next) {
+                if (dynamic_cast<Manifold*>(f)) {
+                    manifolds++;
+                    contacts += ((Manifold*)f)->numContacts;
+                }
+            }
+            
+            printf("Step %d: %d manifolds, %d contacts\n", step, manifolds, contacts);
             for (Rigid* body = solver->bodies; body != nullptr; body = body->next) {
                 printf("  Body %d: Pos(%.4f, %.4f, %.4f)  ", body->id, body->position.x, body->position.y, body->position.z);
                 printf("Rot(%.4f, %.4f, %.4f, %.4f)  ", body->orientation.x, body->orientation.y, body->orientation.z, body->orientation.w);

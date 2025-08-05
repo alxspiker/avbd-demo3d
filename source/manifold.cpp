@@ -97,9 +97,8 @@ bool Manifold::initialize() {
         vec3 normal = contacts[i].normal;
         
         // Precompute C0 - the constraint violation at the beginning of this frame
-        // Following 2D: C0 = basis * (pA - pB) + collision_margin
-        // Use the stored penetration depth from collision detection
-        contacts[i].C0_n = -contacts[i].penetration + PENETRATION_SLOP; // Negative because penetration is positive when objects overlap
+        // Follow same sign convention as C computation
+        contacts[i].C0_n = dot(pA - pB, normal) - COLLISION_MARGIN;
         
         // For tangent directions (friction) - compute relative velocity projected onto tangent
         vec3 vrel = (bodyA->linearVelocity + cross(bodyA->angularVelocity, world_rA)) -
@@ -133,11 +132,11 @@ void Manifold::computeConstraint(float alpha) {
         // If normal points from B to A, then dot(pA - pB, normal) is positive when separated
         float separation = dot(pA - pB, normal);
         
-        // Constraint: we want separation >= PENETRATION_SLOP
-        // So C = separation - PENETRATION_SLOP
+        // Constraint: we want separation >= COLLISION_MARGIN
+        // So C = separation - COLLISION_MARGIN
         // When C < 0, objects are too close (violating constraint)
         // When C >= 0, objects are properly separated (satisfying constraint)
-        C[i*3 + 0] = separation - PENETRATION_SLOP;
+        C[i*3 + 0] = separation - COLLISION_MARGIN;
         
         // Disable friction in position solver
         C[i*3 + 1] = 0.0f;
@@ -149,8 +148,8 @@ void Manifold::computeConstraint(float alpha) {
         fmax[i*3 + 1] =  friction_limit;
         fmin[i*3 + 2] = -friction_limit;
         fmax[i*3 + 2] =  friction_limit;
-        fmin[i*3 + 0] = -FLT_MAX; // Allow negative forces (pushing apart)
-        fmax[i*3 + 0] = 0;       // Prevent positive forces (pulling together)
+        fmin[i*3 + 0] = 0;       // Only allow positive forces (pushing apart)
+        fmax[i*3 + 0] = FLT_MAX; // No upper limit on separation forces
         
         // --- Sticking Logic ---
         float tangent_lambda = sqrtf(lambda[i*3+1]*lambda[i*3+1] + lambda[i*3+2]*lambda[i*3+2]);

@@ -69,12 +69,14 @@ void Solver::defaultParams() {
 
 void Solver::step() {
     // --- 1. Broadphase ---
+    int manifoldCount = 0;
     for (Rigid* bodyA = bodies; bodyA != 0; bodyA = bodyA->next) {
         for (Rigid* bodyB = bodyA->next; bodyB != 0; bodyB = bodyB->next) {
             vec3 dp = bodyA->position - bodyB->position;
             float r = bodyA->radius + bodyB->radius;
             if (dot(dp, dp) <= r * r && !bodyA->isConstrainedTo(bodyB)) {
                 new Manifold(this, bodyA, bodyB);
+                manifoldCount++;
             }
         }
     }
