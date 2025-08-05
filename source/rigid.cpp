@@ -7,7 +7,7 @@
 
 #include "solver.h"
 
-Rigid::Rigid(Solver* solver, const vec3& size, float density, float friction, const vec3& pos, const quat& orient, const vec3& linVel, const vec3& angVel, float restitution)
+Rigid::Rigid(Solver* solver, const vec3& size, float density, float friction, const vec3& pos, const quat& orient, const vec3& linVel, const vec3& angVel)
     : solver(solver),
       forces(0),
       next(0),
@@ -18,8 +18,7 @@ Rigid::Rigid(Solver* solver, const vec3& size, float density, float friction, co
       prevLinearVelocity(linVel),
       prevAngularVelocity(angVel),
       size(size),
-      friction(friction),
-      restitution(restitution)
+      friction(friction)
 {
     // Add this body to the solver's linked list.
     next = solver->bodies;

@@ -52,7 +52,6 @@ vec3 boxSize = {1, 1, 1};
 vec3 boxVelocity = {0, 0, 0};
 float boxFriction = 0.5f;
 float boxDensity = 1.0f;
-float boxRestitution = 0.5f;
 int currScene = 0;
 
 void ui() {
@@ -79,15 +78,9 @@ void ui() {
     if (ImGui::Button("Reset")) scenes[currScene](solver);
     ImGui::SameLine();
     if (ImGui::Button("Default Params")) solver->defaultParams();
-    ImGui::SameLine();
-    if (ImGui::Button("Realistic Physics")) solver->setRealisticPhysics();
-    ImGui::Separator();
-    
-    ImGui::Checkbox("Enable Physics Logging", &solver->enableLogging);
     ImGui::Separator();
 
     ImGui::SliderFloat("Box Friction", &boxFriction, 0.0f, 2.0f);
-    ImGui::SliderFloat("Box Restitution", &boxRestitution, 0.0f, 1.0f);
     ImGui::SliderFloat3("Box Size", &boxSize.x, 0.1f, 10.0f);
     ImGui::SliderFloat3("Box Velocity", &boxVelocity.x, -20.0f, 20.0f);
     ImGui::Separator();
@@ -132,7 +125,7 @@ void input() {
     // Create Box
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
         vec3 createPos = camTarget + normalize(camTarget - camPos) * -5.0f;
-        new Rigid(solver, boxSize, boxDensity, boxFriction, createPos, quat(), boxVelocity, {0,0,0}, boxRestitution);
+        new Rigid(solver, boxSize, boxDensity, boxFriction, createPos, quat(), boxVelocity);
     }
 }
 
