@@ -102,3 +102,18 @@ inline float min(float a, float b) { return a < b ? a : b; }
 inline float max(float a, float b) { return a > b ? a : b; }
 inline float clamp(float x, float a, float b) { return max(a, min(b, x)); }
 inline vec3 solve(const mat3& A, const vec3& b) { vec3 L0=A.cols[0]; if(fabsf(L0.x)<FLT_EPSILON)return vec3(); float d0=L0.x; float L10=L0.y/d0; float L20=L0.z/d0; vec3 L1=A.cols[1]-L0*L10; if(fabsf(L1.y)<FLT_EPSILON)return vec3(); float d1=L1.y; float L21=L1.z/d1; vec3 L2=A.cols[2]-L0*L20-L1*L21; if(fabsf(L2.z)<FLT_EPSILON)return vec3(); float d2=L2.z; vec3 y; y.x=b.x; y.y=b.y-L10*y.x; y.z=b.z-L20*y.x-L21*y.y; vec3 z; z.x=y.x/d0; z.y=y.y/d1; z.z=y.z/d2; vec3 x; x.z=z.z; x.y=z.y-L21*x.z; x.x=z.x-L10*x.y-L20*x.z; return x; }
+
+// Matrix inversion using Gauss-Jordan elimination
+inline bool invert(const mat3& A, mat3& A_inv) {
+    // Use determinant method for 3x3 matrix inversion
+    float det = dot(A.cols[0], cross(A.cols[1], A.cols[2]));
+    if (fabsf(det) < FLT_EPSILON) return false;
+    
+    float inv_det = 1.0f / det;
+    
+    A_inv.cols[0] = cross(A.cols[1], A.cols[2]) * inv_det;
+    A_inv.cols[1] = cross(A.cols[2], A.cols[0]) * inv_det;
+    A_inv.cols[2] = cross(A.cols[0], A.cols[1]) * inv_det;
+    
+    return true;
+}

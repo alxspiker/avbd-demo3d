@@ -26,6 +26,7 @@
 #define PENALTY_MAX 1000000000.0f
 #define COLLISION_MARGIN 0.02f
 #define STICK_THRESH 0.02f
+#define CONTACT_PERSISTENCE_DISTANCE 0.01f  // Added: contacts within this distance are considered persistent
 #define SHOW_CONTACTS true
 
 // --- Forward Declarations ---

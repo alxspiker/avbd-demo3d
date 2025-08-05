@@ -139,6 +139,18 @@ void Manifold::computeConstraint(float alpha) {
         // When C >= 0, objects are properly separated (satisfying constraint)
         C[i*3 + 0] = separation - PENETRATION_SLOP;
         
+        // Add stabilization term (Baumgarte-like) to help convergence
+        if (alpha > 0 && C[i*3 + 0] < 0) {
+            // Add a velocity correction term proportional to penetration depth
+            vec3 vrel = (bodyA->linearVelocity + cross(bodyA->angularVelocity, world_rA)) -
+                        (bodyB->linearVelocity + cross(bodyB->angularVelocity, world_rB));
+            float vn = dot(vrel, normal);
+            
+            // Stabilization: add a term to help close the constraint gap
+            float stabilization_factor = 0.2f; // Moderate stabilization
+            C[i*3 + 0] += stabilization_factor * abs(C[i*3 + 0]) / solver->dt;
+        }
+        
         // Disable friction in position solver
         C[i*3 + 1] = 0.0f;
         C[i*3 + 2] = 0.0f;
@@ -149,8 +161,8 @@ void Manifold::computeConstraint(float alpha) {
         fmax[i*3 + 1] =  friction_limit;
         fmin[i*3 + 2] = -friction_limit;
         fmax[i*3 + 2] =  friction_limit;
-        fmin[i*3 + 0] = -FLT_MAX; // Allow negative forces (pushing apart)
-        fmax[i*3 + 0] = 0;       // Prevent positive forces (pulling together)
+        fmin[i*3 + 0] = 0;       // Normal forces can only push (no pulling)
+        fmax[i*3 + 0] = FLT_MAX; // Allow unlimited repulsive force
         
         // --- Sticking Logic ---
         float tangent_lambda = sqrtf(lambda[i*3+1]*lambda[i*3+1] + lambda[i*3+2]*lambda[i*3+2]);

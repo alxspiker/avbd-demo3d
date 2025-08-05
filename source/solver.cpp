@@ -21,11 +21,46 @@
 struct vec6 { vec3 l; vec3 a; };
 struct mat66 { mat3 ll, la, al, aa; };
 
-// Solve the 6x6 system. We decouple the linear and angular parts.
+// Solve the 6x6 system properly handling coupling terms
 vec6 solve6x6(const mat66& A, const vec6& b) {
-    vec3 linear_part = solve(A.ll, b.l);
-    vec3 angular_part = solve(A.aa, b.a);
-    return {linear_part, angular_part};
+    // For small systems, it's often more stable to solve the coupled system
+    // by block elimination rather than decoupling
+    
+    // Check if coupling terms are significant
+    float ll_norm = length(A.ll * vec3(1,1,1));
+    float aa_norm = length(A.aa * vec3(1,1,1));
+    float la_norm = length(A.la * vec3(1,1,1));
+    float al_norm = length(A.al * vec3(1,1,1));
+    
+    float coupling_ratio = (la_norm + al_norm) / (ll_norm + aa_norm + 1e-10f);
+    
+    if (coupling_ratio < 0.1f) {
+        // Weak coupling, safe to decouple
+        vec3 linear_part = solve(A.ll, b.l);
+        vec3 angular_part = solve(A.aa, b.a);
+        return {linear_part, angular_part};
+    } else {
+        // Strong coupling, solve with block elimination
+        // Solve: [A.ll  A.la] [x_l] = [b.l]
+        //        [A.al  A.aa] [x_a]   [b.a]
+        
+        // Using Schur complement: x_a = (A.aa - A.al * A.ll^-1 * A.la)^-1 * (b.a - A.al * A.ll^-1 * b.l)
+        mat3 A_ll_inv;
+        if (!invert(A.ll, A_ll_inv)) {
+            // Fallback to decoupled solution if inversion fails
+            vec3 linear_part = solve(A.ll, b.l);
+            vec3 angular_part = solve(A.aa, b.a);
+            return {linear_part, angular_part};
+        }
+        
+        mat3 schur = A.aa - A.al * A_ll_inv * A.la;
+        vec3 rhs_schur = b.a - A.al * A_ll_inv * b.l;
+        
+        vec3 x_a = solve(schur, rhs_schur);
+        vec3 x_l = A_ll_inv * (b.l - A.la * x_a);
+        
+        return {x_l, x_a};
+    }
 }
 
 Solver::Solver() : bodies(0), forces(0) {
@@ -68,12 +103,14 @@ void Solver::defaultParams() {
 }
 
 void Solver::step() {
-    // --- 1. Broadphase ---
+    // --- 1. Broadphase with Contact Persistence ---
     for (Rigid* bodyA = bodies; bodyA != 0; bodyA = bodyA->next) {
         for (Rigid* bodyB = bodyA->next; bodyB != 0; bodyB = bodyB->next) {
             vec3 dp = bodyA->position - bodyB->position;
             float r = bodyA->radius + bodyB->radius;
-            if (dot(dp, dp) <= r * r && !bodyA->isConstrainedTo(bodyB)) {
+            // Add small persistence margin to prevent contacts from disappearing too easily
+            float persistence_margin = CONTACT_PERSISTENCE_DISTANCE;
+            if (dot(dp, dp) <= (r + persistence_margin) * (r + persistence_margin) && !bodyA->isConstrainedTo(bodyB)) {
                 new Manifold(this, bodyA, bodyB);
             }
         }
@@ -185,8 +222,23 @@ void Solver::step() {
                     if (force->stiffness[i] != FLT_MAX) continue;
                     float lambda_i = clamp(force->penalty[i] * force->C[i] + force->lambda[i], force->fmin[i], force->fmax[i]);
                     force->lambda[i] = lambda_i;
+                    
+                    // Improved penalty parameter strategy
                     if (force->lambda[i] > force->fmin[i] && force->lambda[i] < force->fmax[i]) {
-                         force->penalty[i] = min(force->penalty[i] + beta * abs(force->C[i]), PENALTY_MAX);
+                        // Active constraint - increase penalty based on constraint violation and convergence
+                        float constraint_violation = abs(force->C[i]);
+                        float penalty_increment = beta * constraint_violation;
+                        
+                        // Adaptive scaling: reduce increment if constraint is converging
+                        if (it > 5) {
+                            float convergence_rate = constraint_violation < 0.001f ? 0.1f : 1.0f;
+                            penalty_increment *= convergence_rate;
+                        }
+                        
+                        force->penalty[i] = min(force->penalty[i] + penalty_increment, PENALTY_MAX);
+                    } else {
+                        // Inactive constraint - decay penalty to prevent over-stiffening
+                        force->penalty[i] = max(force->penalty[i] * 0.95f, PENALTY_MIN);
                     }
                 }
             }
@@ -204,11 +256,26 @@ void Solver::step() {
         body->angularVelocity = vec3(delta_q.x, delta_q.y, delta_q.z) * (2.0f / dt);
         if (delta_q.w < 0) body->angularVelocity = -body->angularVelocity;
         
-        // Apply light damping to help system settle (critical for stability)
-        const float linearDamping = 0.95f;   // 5% linear velocity reduction per frame
-        const float angularDamping = 0.90f;  // 10% angular velocity reduction per frame
-        body->linearVelocity *= linearDamping;
-        body->angularVelocity *= angularDamping;
+        // Adaptive damping based on motion characteristics
+        float vel_magnitude = length(body->linearVelocity);
+        float angvel_magnitude = length(body->angularVelocity);
+        
+        // Detect near-resting state
+        bool near_resting = (vel_magnitude < 0.1f && angvel_magnitude < 0.1f);
+        
+        if (near_resting) {
+            // Stronger damping for near-resting objects to help them settle
+            const float strongLinearDamping = 0.85f;   // 15% linear velocity reduction
+            const float strongAngularDamping = 0.75f;  // 25% angular velocity reduction
+            body->linearVelocity *= strongLinearDamping;
+            body->angularVelocity *= strongAngularDamping;
+        } else {
+            // Normal damping for active objects
+            const float linearDamping = 0.95f;   // 5% linear velocity reduction per frame
+            const float angularDamping = 0.90f;  // 10% angular velocity reduction per frame
+            body->linearVelocity *= linearDamping;
+            body->angularVelocity *= angularDamping;
+        }
     }
 
     // --- 6. Velocity Solve for Restitution (e=0) ---
