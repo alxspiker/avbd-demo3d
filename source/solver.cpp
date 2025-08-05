@@ -44,27 +44,27 @@ void Solver::clear() {
 void Solver::defaultParams() {
     dt = 1.0f / 60.0f;
     gravity = {0.0f, -10.0f, 0.0f};
-    iterations = 10; // Back to 2D reference value
+    iterations = 30; // Increased significantly for better convergence
 
     // Note: in the paper, beta is suggested to be [1, 1000]. Technically, the best choice will
     // depend on the length, mass, and constraint function scales (ie units) of your simulation,
     // along with your strategy for incrementing the penalty parameters.
     // If the value is not in the right range, you may see slower convergance for complex scenes.
-    beta = 100000.0f; // Back to 2D reference value
+    beta = 1000.0f; // Reduced to match paper recommendations for stability
 
     // Alpha controls how much stabilization is applied. Higher values give slower and smoother
     // error correction, and lower values are more responsive and energetic. Tune this depending
     // on your desired constraint error response.
-    alpha = 0.99f;
+    alpha = 0.7f; // Reduced further for more responsive correction
 
     // Gamma controls how much the penalty and lambda values are decayed each step during warmstarting.
     // This should always be < 1 so that the penalty values can decrease (unless you use a different
     // penalty parameter strategy which does not require decay).
-    gamma = 0.99f;
+    gamma = 0.9f; // More aggressive decay for better stability
 
     // Post stabilization applies an extra iteration to fix positional error.
     // This removes the need for the alpha parameter, which can make tuning a little easier.
-    postStabilize = true;
+    postStabilize = false; // Keep disabled to prevent conflicts
 }
 
 void Solver::step() {
@@ -203,6 +203,12 @@ void Solver::step() {
         quat delta_q = body->orientation * conjugate(body->initialOrientation);
         body->angularVelocity = vec3(delta_q.x, delta_q.y, delta_q.z) * (2.0f / dt);
         if (delta_q.w < 0) body->angularVelocity = -body->angularVelocity;
+        
+        // Apply light damping to help system settle (critical for stability)
+        const float linearDamping = 0.95f;   // 5% linear velocity reduction per frame
+        const float angularDamping = 0.90f;  // 10% angular velocity reduction per frame
+        body->linearVelocity *= linearDamping;
+        body->angularVelocity *= angularDamping;
     }
 
     // --- 6. Velocity Solve for Restitution (e=0) ---
