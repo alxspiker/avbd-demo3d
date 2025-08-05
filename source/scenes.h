@@ -30,11 +30,13 @@ static void sceneGround(Solver* solver) {
     new Rigid(solver, {100, 1, 100}, 0.0f, 0.5f, {0, -0.5f, 0}, quat(), {0,0,0}, {0,0,0});
 }
 
-static void sceneSimpleTest(Solver* solver) {
+static void sceneStack(Solver* solver) {
     solver->clear();
     sceneGround(solver);
-    // Just one box for testing
-    new Rigid(solver, {1, 1, 1}, 1.0f, 0.5f, {0, 2.0f, 0}, quat(), {0,0,0}, {0,0,0});
+    // A simple stack of 10 cubes.
+    for (int i = 0; i < 10; ++i) {
+        new Rigid(solver, {1, 1, 1}, 1.0f, 0.5f, {0, i * 1.05f + 0.5f, 0}, quat(), {0,0,0}, {0,0,0});
+    }
 }
 
 static void scenePyramid(Solver* solver) {
@@ -117,7 +119,7 @@ static void sceneSoftBody(Solver* solver) {
 static void (*scenes[])(Solver*) = {
     sceneEmpty,
     sceneGround,
-    sceneSimpleTest,
+    sceneStack,
     scenePyramid,
     sceneWall,
     sceneRod,
@@ -128,7 +130,7 @@ static void (*scenes[])(Solver*) = {
 static const char* sceneNames[] = {
     "Empty",
     "Ground",
-    "SimpleTest",
+    "Stack",
     "Pyramid",
     "Wall",
     "Rod (WIP)",

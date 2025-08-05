@@ -50,7 +50,7 @@ void Solver::defaultParams() {
     // depend on the length, mass, and constraint function scales (ie units) of your simulation,
     // along with your strategy for incrementing the penalty parameters.
     // If the value is not in the right range, you may see slower convergance for complex scenes.
-    beta = 10.0f; // Very small for 3D stability
+    beta = 0.0f; // No penalty ramping for 3D stability
 
     // Alpha controls how much stabilization is applied. Higher values give slower and smoother
     // error correction, and lower values are more responsive and energetic. Tune this depending
