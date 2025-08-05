@@ -57,9 +57,10 @@ struct Rigid {
     float mass, invMass;
     mat3 invInertiaTensor;
     float friction;
+    float restitution; // Coefficient of restitution (bounciness)
     float radius;
 
-    Rigid(Solver* solver, const vec3& size, float density, float friction, const vec3& pos, const quat& orient = quat(), const vec3& linVel = vec3(), const vec3& angVel = vec3());
+    Rigid(Solver* solver, const vec3& size, float density, float friction, const vec3& pos, const quat& orient = quat(), const vec3& linVel = vec3(), const vec3& angVel = vec3(), float restitution = 0.5f);
     ~Rigid();
 
     mat3 getInvInertiaTensorWorld() const;
@@ -111,6 +112,7 @@ struct Manifold : Force {
     Contact contacts[4];
     int numContacts;
     float combinedFriction;
+    float combinedRestitution;
     Manifold(Solver* solver, Rigid* bodyA, Rigid* bodyB);
     int getRowCount() const override;
     bool initialize() override;
@@ -130,6 +132,11 @@ struct Solver {
     bool postStabilize;
     Rigid* bodies;
     Force* forces;
+    
+    // Physics test variables
+    int stepCount;
+    bool enableLogging;
+    float totalEnergy;
 
     Solver();
     ~Solver();
@@ -138,4 +145,12 @@ struct Solver {
     void defaultParams();
     void step();
     void draw();
+    
+    // Physics test functions
+    void logPhysicsState();
+    void calculateTotalEnergy();
+    float calculateKineticEnergy();
+    float calculatePotentialEnergy();
+    int countContacts();
+    void setRealisticPhysics();
 };

@@ -18,8 +18,26 @@ file(GLOB_RECURSE SOURCES "source/*.cpp" "source/*.h")
 # Add Executable
 add_executable(${PROJECT_NAME} ${SOURCES})
 
+# Physics Test Executable (console-only)
+add_executable(physics_test 
+    source/physics_test.cpp
+    source/solver.cpp
+    source/rigid.cpp
+    source/collision.cpp
+    source/manifold.cpp
+    source/joint.cpp
+    source/spring.cpp
+    source/force.cpp
+)
+
+# Include and link for physics test (no GUI dependencies)
+target_include_directories(physics_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/source"
+)
+
 if(WIN32)
     target_compile_definitions(avbd_demo3d PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_definitions(physics_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 endif()
 
 # Include SDL2 first (ImGui needs it)

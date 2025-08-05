@@ -45,6 +45,7 @@ int Manifold::getRowCount() const {
 
 bool Manifold::initialize() {
     combinedFriction = sqrtf(bodyA->friction * bodyB->friction);
+    combinedRestitution = max(bodyA->restitution, bodyB->restitution); // Use max for more bouncy behavior
 
     // --- Warm Starting Cache ---
     Contact oldContacts[4];

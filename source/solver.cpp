@@ -30,6 +30,9 @@ vec6 solve6x6(const mat66& A, const vec6& b) {
 
 Solver::Solver() : bodies(0), forces(0) {
     defaultParams();
+    stepCount = 0;
+    enableLogging = false;
+    totalEnergy = 0.0f;
 }
 
 Solver::~Solver() {
@@ -43,28 +46,35 @@ void Solver::clear() {
 
 void Solver::defaultParams() {
     dt = 1.0f / 60.0f;
-    gravity = {0.0f, -10.0f, 0.0f};
-    iterations = 10; // Back to 2D reference value
-
-    // Note: in the paper, beta is suggested to be [1, 1000]. Technically, the best choice will
-    // depend on the length, mass, and constraint function scales (ie units) of your simulation,
-    // along with your strategy for incrementing the penalty parameters.
-    // If the value is not in the right range, you may see slower convergance for complex scenes.
-    beta = 100000.0f; // Back to 2D reference value
-
-    // Alpha controls how much stabilization is applied. Higher values give slower and smoother
-    // error correction, and lower values are more responsive and energetic. Tune this depending
-    // on your desired constraint error response.
-    alpha = 0.99f;
-
-    // Gamma controls how much the penalty and lambda values are decayed each step during warmstarting.
-    // This should always be < 1 so that the penalty values can decrease (unless you use a different
-    // penalty parameter strategy which does not require decay).
-    gamma = 0.99f;
-
-    // Post stabilization applies an extra iteration to fix positional error.
-    // This removes the need for the alpha parameter, which can make tuning a little easier.
+    gravity = {0.0f, -9.81f, 0.0f}; // More realistic gravity
+    iterations = 20; // Increased for stability
+    
+    // Realistic physics parameters for stable, accurate simulation
+    beta = 500000.0f; // Increased for stronger constraints
+    alpha = 0.95f; // Reduced for more responsive error correction
+    gamma = 0.98f; // Slightly more aggressive decay
     postStabilize = true;
+    enableLogging = false;
+}
+
+void Solver::setRealisticPhysics() {
+    // Parameters tuned for realistic physics behavior
+    gravity = {0.0f, -9.81f, 0.0f}; // Earth gravity
+    iterations = 30; // More iterations for accuracy
+    beta = 1000000.0f; // Strong constraint enforcement
+    alpha = 0.9f; // Good balance between stability and responsiveness
+    gamma = 0.95f; // Moderate decay for warmstarting
+    postStabilize = true;
+    enableLogging = true;
+    
+    printf("Physics parameters set for realistic behavior:\n");
+    printf("  Gravity: %.2f m/s²\n", -gravity.y);
+    printf("  Iterations: %d\n", iterations);
+    printf("  Beta: %.0f\n", beta);
+    printf("  Alpha: %.3f\n", alpha);
+    printf("  Gamma: %.3f\n", gamma);
+    printf("  Post-stabilization: %s\n", postStabilize ? "enabled" : "disabled");
+    printf("\n");
 }
 
 void Solver::step() {
@@ -295,9 +305,122 @@ void Solver::step() {
             }
         }
     }
+    
+    // Log physics state for comprehensive testing
+    logPhysicsState();
 }
 
 void Solver::draw() {
     for (Rigid* body = bodies; body != 0; body = body->next) body->draw();
     for (Force* force = forces; force != 0; force = force->next) force->draw();
+}
+
+// Physics test and logging functions
+void Solver::calculateTotalEnergy() {
+    totalEnergy = calculateKineticEnergy() + calculatePotentialEnergy();
+}
+
+float Solver::calculateKineticEnergy() {
+    float totalKE = 0.0f;
+    for (Rigid* body = bodies; body != 0; body = body->next) {
+        if (body->invMass > 0) { // Only dynamic bodies
+            // Linear kinetic energy: 0.5 * m * v²
+            float linearKE = 0.5f * body->mass * dot(body->linearVelocity, body->linearVelocity);
+            
+            // Rotational kinetic energy: 0.5 * ω^T * I * ω
+            mat3 I_world = mat3_from_quat(body->orientation) * transpose(body->invInertiaTensor) * transpose(mat3_from_quat(body->orientation));
+            vec3 Iw = I_world * body->angularVelocity;
+            float rotationalKE = 0.5f * dot(body->angularVelocity, Iw);
+            
+            totalKE += linearKE + rotationalKE;
+        }
+    }
+    return totalKE;
+}
+
+float Solver::calculatePotentialEnergy() {
+    float totalPE = 0.0f;
+    for (Rigid* body = bodies; body != 0; body = body->next) {
+        if (body->invMass > 0) { // Only dynamic bodies
+            // Gravitational potential energy: m * g * h
+            float height = body->position.y;
+            totalPE += body->mass * (-gravity.y) * height;
+        }
+    }
+    return totalPE;
+}
+
+int Solver::countContacts() {
+    int totalContacts = 0;
+    for (Force* force = forces; force != 0; force = force->next) {
+        if (force->isManifold()) {
+            Manifold* manifold = static_cast<Manifold*>(force);
+            totalContacts += manifold->numContacts;
+        }
+    }
+    return totalContacts;
+}
+
+void Solver::logPhysicsState() {
+    if (!enableLogging) return;
+    
+    stepCount++;
+    
+    // Log every 60 steps (1 second at 60 FPS)
+    if (stepCount % 60 == 0) {
+        calculateTotalEnergy();
+        int contacts = countContacts();
+        int bodyCount = 0;
+        int dynamicBodies = 0;
+        
+        // Count bodies
+        for (Rigid* body = bodies; body != 0; body = body->next) {
+            bodyCount++;
+            if (body->invMass > 0) dynamicBodies++;
+        }
+        
+        printf("=== Physics State at t=%.2fs (step %d) ===\n", stepCount * dt, stepCount);
+        printf("Bodies: %d total, %d dynamic, %d static\n", bodyCount, dynamicBodies, bodyCount - dynamicBodies);
+        printf("Active contacts: %d\n", contacts);
+        printf("Total energy: %.3f J (KE: %.3f J, PE: %.3f J)\n", 
+               totalEnergy, calculateKineticEnergy(), calculatePotentialEnergy());
+        
+        // Log individual body states for key objects
+        int bodyIndex = 0;
+        for (Rigid* body = bodies; body != 0; body = body->next) {
+            if (body->invMass > 0 && bodyIndex < 8) { // Log first 8 dynamic bodies
+                vec3 vel = body->linearVelocity;
+                vec3 angVel = body->angularVelocity;
+                float speed = length(vel);
+                float angSpeed = length(angVel);
+                
+                printf("  Body %d: pos=(%.2f,%.2f,%.2f) vel=%.2f m/s angVel=%.2f rad/s mass=%.1f kg\n",
+                       bodyIndex, body->position.x, body->position.y, body->position.z,
+                       speed, angSpeed, body->mass);
+                       
+                // Check for excessive velocities (potential instability)
+                if (speed > 50.0f || angSpeed > 50.0f) {
+                    printf("    WARNING: High velocity detected! May indicate instability.\n");
+                }
+            }
+            if (body->invMass > 0) bodyIndex++;
+        }
+        
+        // Check energy conservation (allow for some numerical error and energy dissipation)
+        static float initialEnergy = -1.0f;
+        if (initialEnergy < 0.0f) {
+            initialEnergy = totalEnergy;
+            printf("Initial total energy: %.3f J\n", initialEnergy);
+        } else {
+            float energyChange = totalEnergy - initialEnergy;
+            float energyChangePercent = (initialEnergy > 0.001f) ? (energyChange / initialEnergy) * 100.0f : 0.0f;
+            printf("Energy change: %.3f J (%.1f%% of initial)\n", energyChange, energyChangePercent);
+            
+            if (energyChangePercent > 10.0f) {
+                printf("    WARNING: Significant energy gain! Possible numerical instability.\n");
+            }
+        }
+        
+        printf("\n");
+    }
 }
