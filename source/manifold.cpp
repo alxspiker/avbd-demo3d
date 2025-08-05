@@ -96,9 +96,8 @@ bool Manifold::initialize() {
         vec3 pB = bodyB->position + world_rB;
         vec3 normal = contacts[i].normal;
         
-        // Precompute C0 - the constraint violation at the beginning of this frame
-        // Follow same sign convention as C computation
-        contacts[i].C0_n = dot(pA - pB, normal) - COLLISION_MARGIN;
+        // Precompute C0 - follow same sign convention as C computation
+        contacts[i].C0_n = -dot(pA - pB, normal) + COLLISION_MARGIN;
         
         // For tangent directions (friction) - compute relative velocity projected onto tangent
         vec3 vrel = (bodyA->linearVelocity + cross(bodyA->angularVelocity, world_rA)) -
@@ -132,11 +131,10 @@ void Manifold::computeConstraint(float alpha) {
         // If normal points from B to A, then dot(pA - pB, normal) is positive when separated
         float separation = dot(pA - pB, normal);
         
-        // Constraint: we want separation >= COLLISION_MARGIN
-        // So C = separation - COLLISION_MARGIN
-        // When C < 0, objects are too close (violating constraint)
-        // When C >= 0, objects are properly separated (satisfying constraint)
-        C[i*3 + 0] = separation - COLLISION_MARGIN;
+        // Constraint should be positive when violated (so positive force pushes apart)
+        // separation is positive when separated, so C should be negative when separated
+        // But we want positive forces when objects are penetrating (negative separation)
+        C[i*3 + 0] = -separation + COLLISION_MARGIN;
         
         // Disable friction in position solver
         C[i*3 + 1] = 0.0f;
