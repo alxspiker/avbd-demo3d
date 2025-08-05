@@ -30,7 +30,7 @@
 const float PENETRATION_SLOP = 0.001f; // 1mm
 
 Manifold::Manifold(Solver* solver, Rigid* bodyA, Rigid* bodyB)
-    : Force(solver, bodyA, bodyB), numContacts(0)
+    : Force(solver, bodyA, bodyB), numContacts(0), combinedRestitution(0.0f)
 {
     // The constructor is minimal, all work is done in initialize
     for (int i = 0; i < 4; ++i) {
@@ -45,6 +45,7 @@ int Manifold::getRowCount() const {
 
 bool Manifold::initialize() {
     combinedFriction = sqrtf(bodyA->friction * bodyB->friction);
+    combinedRestitution = max(bodyA->restitution, bodyB->restitution); // Take the higher restitution
 
     // --- Warm Starting Cache ---
     Contact oldContacts[4];

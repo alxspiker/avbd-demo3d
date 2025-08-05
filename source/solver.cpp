@@ -43,27 +43,17 @@ void Solver::clear() {
 
 void Solver::defaultParams() {
     dt = 1.0f / 60.0f;
-    gravity = {0.0f, -10.0f, 0.0f};
-    iterations = 10; // Back to 2D reference value
+    gravity = {0.0f, -9.81f, 0.0f}; // Earth gravity for realistic physics
+    iterations = 20; // More iterations for better accuracy and stability
 
-    // Note: in the paper, beta is suggested to be [1, 1000]. Technically, the best choice will
-    // depend on the length, mass, and constraint function scales (ie units) of your simulation,
-    // along with your strategy for incrementing the penalty parameters.
-    // If the value is not in the right range, you may see slower convergance for complex scenes.
-    beta = 100000.0f; // Back to 2D reference value
+    // Tuned for realistic physics behavior with proper constraint enforcement
+    beta = 500000.0f; // Higher penalty for stronger constraint enforcement
 
-    // Alpha controls how much stabilization is applied. Higher values give slower and smoother
-    // error correction, and lower values are more responsive and energetic. Tune this depending
-    // on your desired constraint error response.
-    alpha = 0.99f;
+    // Improved stabilization parameters for realistic behavior
+    alpha = 0.95f; // Balanced error correction for realistic response
+    gamma = 0.98f; // Slight decay for better convergence
 
-    // Gamma controls how much the penalty and lambda values are decayed each step during warmstarting.
-    // This should always be < 1 so that the penalty values can decrease (unless you use a different
-    // penalty parameter strategy which does not require decay).
-    gamma = 0.99f;
-
-    // Post stabilization applies an extra iteration to fix positional error.
-    // This removes the need for the alpha parameter, which can make tuning a little easier.
+    // Post stabilization for stable contact handling
     postStabilize = true;
 }
 
@@ -235,7 +225,7 @@ void Solver::step() {
                 float em = m->bodyA->invMass + m->bodyB->invMass + qa + qb;
                 if (em <= 0) continue;
 
-                float e = 0.0f;
+                float e = m->combinedRestitution; // Use combined restitution for realistic bouncing
                 float j = - (1.0f + e) * v_n / em;
 
                 vec3 impulse = j * n;
