@@ -50,7 +50,7 @@ void Solver::defaultParams() {
     // depend on the length, mass, and constraint function scales (ie units) of your simulation,
     // along with your strategy for incrementing the penalty parameters.
     // If the value is not in the right range, you may see slower convergance for complex scenes.
-    beta = 0.0f; // No penalty ramping for 3D stability
+    beta = 100000.0f; // Back to 2D reference value
 
     // Alpha controls how much stabilization is applied. Higher values give slower and smoother
     // error correction, and lower values are more responsive and energetic. Tune this depending
@@ -69,14 +69,12 @@ void Solver::defaultParams() {
 
 void Solver::step() {
     // --- 1. Broadphase ---
-    int manifoldCount = 0;
     for (Rigid* bodyA = bodies; bodyA != 0; bodyA = bodyA->next) {
         for (Rigid* bodyB = bodyA->next; bodyB != 0; bodyB = bodyB->next) {
             vec3 dp = bodyA->position - bodyB->position;
             float r = bodyA->radius + bodyB->radius;
             if (dot(dp, dp) <= r * r && !bodyA->isConstrainedTo(bodyB)) {
                 new Manifold(this, bodyA, bodyB);
-                manifoldCount++;
             }
         }
     }

@@ -22,7 +22,7 @@
 
 // --- Configuration Constants ---
 #define MAX_CONSTRAINT_ROWS 12
-#define PENALTY_MIN 10.0f   // Very small for 3D stability
+#define PENALTY_MIN 1000.0f
 #define PENALTY_MAX 1000000000.0f
 #define COLLISION_MARGIN 0.02f
 #define STICK_THRESH 0.02f
