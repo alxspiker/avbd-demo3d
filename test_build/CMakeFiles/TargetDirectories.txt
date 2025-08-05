@@ -1,3 +1,0 @@
-/home/runner/work/avbd-demo3d/avbd-demo3d/test_build/CMakeFiles/test_physics.dir
-/home/runner/work/avbd-demo3d/avbd-demo3d/test_build/CMakeFiles/edit_cache.dir
-/home/runner/work/avbd-demo3d/avbd-demo3d/test_build/CMakeFiles/rebuild_cache.dir
