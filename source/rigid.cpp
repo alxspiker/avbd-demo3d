@@ -7,10 +7,13 @@
 
 #include "solver.h"
 
+int Rigid::next_id = 1;
+
 Rigid::Rigid(Solver* solver, const vec3& size, float density, float friction, const vec3& pos, const quat& orient, const vec3& linVel, const vec3& angVel)
     : solver(solver),
       forces(0),
       next(0),
+      id(next_id++),
       position(pos),
       orientation(orient),
       linearVelocity(linVel),

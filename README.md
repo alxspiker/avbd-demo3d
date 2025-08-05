@@ -157,8 +157,19 @@ If you prefer manual building or need to customize the process:
 - **🔍 Zoom**: Mouse Wheel
 - **📦 Create Box**: Right Mouse Click
 - **⚙️ Physics Controls**: Use ImGui panel for solver parameters
+- **Drag Box**: Left Mouse Button
 
-## Project Structure
+### Command-Line Options
+
+You can run the simulation in headless mode or configure the initial state with the following command-line arguments:
+
+| Option | Alias | Description | Example |
+| :--- | :--- | :--- | :--- |
+| `--nogfx` | `--headless` | Run the simulation without a graphical interface. | `avbd_demo3d --nogfx` |
+| `--scene` | `-s` | Load the specified scene. | `avbd_demo3d --scene Stack` |
+| `--steps` | `-n` | Run for a specified number of steps in headless mode. | `avbd_demo3d --nogfx --steps 100` |
+
+### 📂 Project Structure
 
 The codebase maintains the same clean organization as the original 2D version:
 

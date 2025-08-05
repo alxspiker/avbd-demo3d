@@ -1,3 +1,4 @@
+.vscode
 code_snapshot.txt
 show_code.py
 build
@@ -7,3 +8,4 @@ external/SDL/**
 *.exe
 *.tmp
 *.log
+imgui.ini

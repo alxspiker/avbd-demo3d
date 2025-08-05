@@ -43,6 +43,9 @@ struct Rigid {
     Force* forces;
     Rigid* next;
 
+    int id; // Unique identifier for each body
+    static int next_id; // Static counter
+
     vec3 position;
     quat orientation;
     vec3 linearVelocity, angularVelocity;

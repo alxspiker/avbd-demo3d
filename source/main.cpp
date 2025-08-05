@@ -173,7 +173,54 @@ void mainLoop() {
     SDL_GL_SwapWindow(Window);
 }
 
-int main(int, char**) {
+int main(int argc, char** argv) {
+    bool headless = false;
+    const char* requestedScene = nullptr;
+    int steps = 300; // Default number of steps for headless mode
+
+    // Parse command line arguments
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--nogfx") == 0 || strcmp(argv[i], "--headless") == 0) {
+            headless = true;
+        } else if ((strcmp(argv[i], "--scene") == 0 || strcmp(argv[i], "-s") == 0) && i + 1 < argc) {
+            requestedScene = argv[++i];
+        } else if ((strcmp(argv[i], "--steps") == 0 || strcmp(argv[i], "-n") == 0) && i + 1 < argc) {
+            steps = atoi(argv[++i]);
+        }
+    }
+
+    solver = new Solver();
+
+    int sceneIdx = currScene;
+    if (requestedScene) {
+        for (int i = 0; i < sceneCount; ++i) {
+            if (strcmp(sceneNames[i], requestedScene) == 0) {
+                sceneIdx = i;
+                break;
+            }
+        }
+    }
+
+    scenes[sceneIdx](solver);
+
+    if (headless) {
+        // Headless mode: run physics and print body states each step
+        printf("Running in headless mode: scene '%s', steps=%d\n", sceneNames[sceneIdx], steps);
+        for (int step = 0; step < steps; ++step) {
+            solver->step();
+            printf("Step %d:\n", step);
+            for (Rigid* body = solver->bodies; body != nullptr; body = body->next) {
+                printf("  Body %d: Pos(%.4f, %.4f, %.4f)  ", body->id, body->position.x, body->position.y, body->position.z);
+                printf("Rot(%.4f, %.4f, %.4f, %.4f)  ", body->orientation.x, body->orientation.y, body->orientation.z, body->orientation.w);
+                printf("LinVel(%.4f, %.4f, %.4f)  ", body->linearVelocity.x, body->linearVelocity.y, body->linearVelocity.z);
+                printf("AngVel(%.4f, %.4f, %.4f)\n", body->angularVelocity.x, body->angularVelocity.y, body->angularVelocity.z);
+            }
+        }
+        delete solver;
+        return 0;
+    }
+
+    // Normal graphics mode
     SDL_Init(SDL_INIT_VIDEO);
     SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1);
     SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 4);
@@ -181,15 +228,14 @@ int main(int, char**) {
     Context = SDL_GL_CreateContext(Window);
     SDL_GL_MakeCurrent(Window, Context);
     SDL_GL_SetSwapInterval(1);
-    
+
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGui::StyleColorsDark();
     ImGui_ImplSDL2_InitForOpenGL(Window, Context);
     ImGui_ImplOpenGL3_Init("#version 150");
 
-    solver = new Solver();
-    scenes[currScene](solver);
+    scenes[sceneIdx](solver);
 
     while (Running) {
         mainLoop();
