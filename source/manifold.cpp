@@ -69,6 +69,9 @@ bool Manifold::initialize() {
         lambda[i*3 + 0] = lambda[i*3 + 1] = lambda[i*3 + 2] = 0.0f;
         penalty[i*3 + 0] = penalty[i*3 + 1] = penalty[i*3 + 2] = PENALTY_MIN;
         contacts[i].stick = false;
+        contacts[i].jt1 = 0.0f;
+        contacts[i].jt2 = 0.0f;
+        contacts[i].jn = 0.0f;
 
         for (int j = 0; j < oldNumContacts; ++j) {
             if (contacts[i].feature.value == oldContacts[j].feature.value) {
@@ -139,12 +142,19 @@ void Manifold::computeConstraint(float alpha) {
         // When C >= 0, objects are properly separated (satisfying constraint)
         C[i*3 + 0] = separation - PENETRATION_SLOP;
         
-        // Disable friction in position solver
-        C[i*3 + 1] = 0.0f;
-        C[i*3 + 2] = 0.0f;
+        // Soft friction in position solver: match static friction if sticking else allow sliding with zero target
+        float friction_limit = combinedFriction * std::fabs(lambda[i*3 + 0]);
+        if (contacts[i].stick) {
+            // Resist relative motion in tangents when sticking
+            // Use precomputed C0_t as a proxy to keep tangential relative velocity near zero
+            C[i*3 + 1] = contacts[i].C0_t.x;
+            C[i*3 + 2] = contacts[i].C0_t.y;
+        } else {
+            C[i*3 + 1] = 0.0f;
+            C[i*3 + 2] = 0.0f;
+        }
         
         // --- Update Force Limits for Friction Cone ---
-        float friction_limit = combinedFriction * std::fabs(lambda[i*3 + 0]);
         fmin[i*3 + 1] = -friction_limit;
         fmax[i*3 + 1] =  friction_limit;
         fmin[i*3 + 2] = -friction_limit;

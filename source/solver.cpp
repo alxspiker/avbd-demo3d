@@ -205,7 +205,7 @@ void Solver::step() {
     // results. This created a positive feedback loop that injected massive amounts
     // of energy, causing bouncing and accelerating sliding. A single, non-iterative
     // pass is the correct approach for this type of post-correction step.
-    const int vel_iterations = 1;
+         const int vel_iterations = 2;
     for (int vel_it = 0; vel_it < vel_iterations; ++vel_it) { // This loop now effectively runs only once
         for (Force* force = forces; force; force = force->next) {
             if (!force->isManifold()) continue;
@@ -231,6 +231,9 @@ void Solver::step() {
                 float e = 0.0f;
                 float j = - (1.0f + e) * v_n / em;
 
+                // Accumulate normal impulse (RAII local clamp not needed here because we don't warmstart jn across frames)
+                m->contacts[i].jn += j;
+
                 vec3 impulse = j * n;
 
                 if (m->bodyA->invMass > 0) {
@@ -243,7 +246,7 @@ void Solver::step() {
                     m->bodyB->angularVelocity -= m->bodyB->getInvInertiaTensorWorld() * cross(world_rB, impulse);
                 }
 
-                // --- FIX: Implement Friction Impulse ---
+                // --- Friction Impulse with accumulation ---
                 // Re-calculate relative velocity after normal impulse
                 v_rel = (m->bodyA->linearVelocity + cross(m->bodyA->angularVelocity, world_rA)) -
                         (m->bodyB->linearVelocity + cross(m->bodyB->angularVelocity, world_rB));
@@ -268,21 +271,25 @@ void Solver::step() {
                 float qb_t2 = dot(cross(Ib_t2, world_rB), tangent2);
                 float em_t2 = m->bodyA->invMass + m->bodyB->invMass + qa_t2 + qb_t2;
 
-                // Calculate friction impulse in each tangent direction
-                float jt1 = (em_t1 > 0) ? -dot(v_rel, tangent1) / em_t1 : 0.0f;
-                float jt2 = (em_t2 > 0) ? -dot(v_rel, tangent2) / em_t2 : 0.0f;
+                // Target velocity = 0 (Coulomb), compute impulse increments
+                float djt1 = (em_t1 > 0) ? -dot(v_rel, tangent1) / em_t1 : 0.0f;
+                float djt2 = (em_t2 > 0) ? -dot(v_rel, tangent2) / em_t2 : 0.0f;
 
-                // Clamp to friction cone
-                float friction_limit = m->combinedFriction * j;
-                float tangent_impulse_mag = sqrtf(jt1 * jt1 + jt2 * jt2);
+                // Accumulate then clamp to cone using max of instantaneous normal impulse and estimated constraint normal impulse over dt
+                m->contacts[i].jt1 += djt1;
+                m->contacts[i].jt2 += djt2;
+                float normal_lambda_mag = std::fabs(m->lambda[i*3 + 0]);
+                float normal_impulse_est = normal_lambda_mag * dt;
+                float friction_limit = m->combinedFriction * max(std::fabs(m->contacts[i].jn), normal_impulse_est);
+                float tangent_impulse_mag = sqrtf(m->contacts[i].jt1 * m->contacts[i].jt1 + m->contacts[i].jt2 * m->contacts[i].jt2);
                 if (tangent_impulse_mag > friction_limit) {
-                    float scale = friction_limit / tangent_impulse_mag;
-                    jt1 *= scale;
-                    jt2 *= scale;
+                    float scale = (tangent_impulse_mag > 0.0f) ? (friction_limit / tangent_impulse_mag) : 0.0f;
+                    m->contacts[i].jt1 *= scale;
+                    m->contacts[i].jt2 *= scale;
                 }
 
-                // Apply friction impulse
-                vec3 friction_impulse = tangent1 * jt1 + tangent2 * jt2;
+                // Apply friction impulse (incremental)
+                vec3 friction_impulse = tangent1 * m->contacts[i].jt1 + tangent2 * m->contacts[i].jt2;
                 if (m->bodyA->invMass > 0) { m->bodyA->linearVelocity += m->bodyA->invMass * friction_impulse; m->bodyA->angularVelocity += m->bodyA->getInvInertiaTensorWorld() * cross(world_rA, friction_impulse); }
                 if (m->bodyB->invMass > 0) { m->bodyB->linearVelocity -= m->bodyB->invMass * friction_impulse; m->bodyB->angularVelocity -= m->bodyB->getInvInertiaTensorWorld() * cross(world_rB, friction_impulse); }
             }

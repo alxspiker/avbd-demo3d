@@ -111,6 +111,9 @@ struct Manifold : Force {
         float C0_n;  // Stores the initial normal constraint violation for the Taylor series approximation used in stabilization
         vec3 C0_t;
         bool stick;
+        // Accumulated impulses for warmstarting friction and normal in the velocity solve
+        float jt1, jt2; // tangential accumulated impulses
+        float jn;       // normal accumulated impulse this step (not persisted across frames)
     };
     Contact contacts[4];
     int numContacts;
