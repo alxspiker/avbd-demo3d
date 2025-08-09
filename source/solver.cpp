@@ -276,20 +276,27 @@ void Solver::step() {
                 float djt2 = (em_t2 > 0) ? -dot(v_rel, tangent2) / em_t2 : 0.0f;
 
                 // Accumulate then clamp to cone using max of instantaneous normal impulse and estimated constraint normal impulse over dt
-                m->contacts[i].jt1 += djt1;
-                m->contacts[i].jt2 += djt2;
+                float old_jt1 = m->contacts[i].jt1;
+                float old_jt2 = m->contacts[i].jt2;
+                float new_jt1 = old_jt1 + djt1;
+                float new_jt2 = old_jt2 + djt2;
                 float normal_lambda_mag = std::fabs(m->lambda[i*3 + 0]);
                 float normal_impulse_est = normal_lambda_mag * dt;
                 float friction_limit = m->combinedFriction * max(std::fabs(m->contacts[i].jn), normal_impulse_est);
-                float tangent_impulse_mag = sqrtf(m->contacts[i].jt1 * m->contacts[i].jt1 + m->contacts[i].jt2 * m->contacts[i].jt2);
-                if (tangent_impulse_mag > friction_limit) {
-                    float scale = (tangent_impulse_mag > 0.0f) ? (friction_limit / tangent_impulse_mag) : 0.0f;
-                    m->contacts[i].jt1 *= scale;
-                    m->contacts[i].jt2 *= scale;
+                float new_tangent_mag = sqrtf(new_jt1 * new_jt1 + new_jt2 * new_jt2);
+                if (new_tangent_mag > friction_limit) {
+                    float scale = (new_tangent_mag > 0.0f) ? (friction_limit / new_tangent_mag) : 0.0f;
+                    new_jt1 *= scale;
+                    new_jt2 *= scale;
                 }
+                // Delta to apply this iteration
+                float apply_djt1 = new_jt1 - old_jt1;
+                float apply_djt2 = new_jt2 - old_jt2;
+                m->contacts[i].jt1 = new_jt1;
+                m->contacts[i].jt2 = new_jt2;
 
                 // Apply friction impulse (incremental)
-                vec3 friction_impulse = tangent1 * m->contacts[i].jt1 + tangent2 * m->contacts[i].jt2;
+                vec3 friction_impulse = tangent1 * apply_djt1 + tangent2 * apply_djt2;
                 if (m->bodyA->invMass > 0) { m->bodyA->linearVelocity += m->bodyA->invMass * friction_impulse; m->bodyA->angularVelocity += m->bodyA->getInvInertiaTensorWorld() * cross(world_rA, friction_impulse); }
                 if (m->bodyB->invMass > 0) { m->bodyB->linearVelocity -= m->bodyB->invMass * friction_impulse; m->bodyB->angularVelocity -= m->bodyB->getInvInertiaTensorWorld() * cross(world_rB, friction_impulse); }
             }
