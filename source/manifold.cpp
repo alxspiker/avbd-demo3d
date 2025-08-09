@@ -79,6 +79,9 @@ bool Manifold::initialize() {
                 lambda[i*3 + 1] = oldLambda[j*3 + 1];
                 lambda[i*3 + 2] = oldLambda[j*3 + 2];
                 contacts[i].stick = oldContacts[j].stick;
+                // Warmstart friction impulses from previous frame
+                contacts[i].jt1 = oldContacts[j].jt1;
+                contacts[i].jt2 = oldContacts[j].jt2;
                 
                 // For sticking contacts, reuse the exact previous contact points
                 if(contacts[i].stick) {
@@ -116,6 +119,9 @@ bool Manifold::initialize() {
         contacts[i].C0_t.x = dot(vrel, tangent1);
         contacts[i].C0_t.y = dot(vrel, tangent2);
         contacts[i].C0_t.z = 0;
+
+        // Reset per-step accumulated normal impulse
+        contacts[i].jn = 0.0f;
     }
     
     return true;

@@ -120,7 +120,7 @@ void Solver::step() {
     }
 
     // --- 4. Main Iterative Solver Loop ---
-    int totalIterations = iterations + (postStabilize ? 1 : 0);
+         int totalIterations = max(12, iterations) + (postStabilize ? 1 : 0);
     for (int it = 0; it < totalIterations; ++it) {
         float currentAlpha = postStabilize ? (it < iterations ? 1.0f : 0.0f) : this->alpha;
 
@@ -205,7 +205,7 @@ void Solver::step() {
     // results. This created a positive feedback loop that injected massive amounts
     // of energy, causing bouncing and accelerating sliding. A single, non-iterative
     // pass is the correct approach for this type of post-correction step.
-         const int vel_iterations = 2;
+         const int vel_iterations = 3;
     for (int vel_it = 0; vel_it < vel_iterations; ++vel_it) { // This loop now effectively runs only once
         for (Force* force = forces; force; force = force->next) {
             if (!force->isManifold()) continue;
