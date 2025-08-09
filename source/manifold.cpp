@@ -106,7 +106,7 @@ bool Manifold::initialize() {
                     (bodyB->linearVelocity + cross(bodyB->angularVelocity, world_rB));
 
         vec3 tangent1, tangent2;
-        if (abs(normal.x) > 0.9f) tangent1 = normalize(cross(normal, vec3(0, 1, 0)));
+        if (std::fabs(normal.x) > 0.9f) tangent1 = normalize(cross(normal, vec3(0, 1, 0)));
         else tangent1 = normalize(cross(normal, vec3(1, 0, 0)));
         tangent2 = normalize(cross(normal, tangent1));
 
@@ -144,7 +144,7 @@ void Manifold::computeConstraint(float alpha) {
         C[i*3 + 2] = 0.0f;
         
         // --- Update Force Limits for Friction Cone ---
-        float friction_limit = combinedFriction * abs(lambda[i*3 + 0]);
+        float friction_limit = combinedFriction * std::fabs(lambda[i*3 + 0]);
         fmin[i*3 + 1] = -friction_limit;
         fmax[i*3 + 1] =  friction_limit;
         fmin[i*3 + 2] = -friction_limit;
@@ -168,7 +168,7 @@ void Manifold::computeDerivatives(vec3& J_linear, vec3& J_angular, const Rigid* 
 
     vec3 normal = c.normal;
     vec3 tangent1, tangent2;
-    if (abs(normal.x) > 0.9f) tangent1 = normalize(cross(normal, vec3(0, 1, 0)));
+    if (std::fabs(normal.x) > 0.9f) tangent1 = normalize(cross(normal, vec3(0, 1, 0)));
     else tangent1 = normalize(cross(normal, vec3(1, 0, 0)));
     tangent2 = normalize(cross(normal, tangent1));
     

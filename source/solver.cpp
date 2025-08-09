@@ -179,7 +179,7 @@ void Solver::step() {
                     float lambda_i = clamp(force->penalty[i] * force->C[i] + force->lambda[i], force->fmin[i], force->fmax[i]);
                     force->lambda[i] = lambda_i;
                     if (force->lambda[i] > force->fmin[i] && force->lambda[i] < force->fmax[i]) {
-                         force->penalty[i] = min(force->penalty[i] + beta * abs(force->C[i]), PENALTY_MAX);
+                         force->penalty[i] = min(force->penalty[i] + beta * std::fabs(force->C[i]), PENALTY_MAX);
                     }
                 }
             }
@@ -250,7 +250,7 @@ void Solver::step() {
 
                 // Create tangent vectors
                 vec3 tangent1, tangent2;
-                if (abs(n.x) > 0.9f) tangent1 = normalize(cross(n, vec3(0, 1, 0)));
+                if (std::fabs(n.x) > 0.9f) tangent1 = normalize(cross(n, vec3(0, 1, 0)));
                 else tangent1 = normalize(cross(n, vec3(1, 0, 0)));
                 tangent2 = normalize(cross(n, tangent1));
 
