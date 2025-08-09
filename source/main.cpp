@@ -177,8 +177,12 @@ int main(int argc, char** argv) {
     bool headless = false;
     const char* requestedScene = nullptr;
     int steps = 300; // Default number of steps for headless mode
+    bool use2DPreset = false;
+    bool useClassic = false;
+    const char* csvPath = nullptr;
 
-    // Parse command line arguments
+    solver = new Solver();
+    // Parse command line arguments (solver must exist before applying trace flags)
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--nogfx") == 0 || strcmp(argv[i], "--headless") == 0) {
             headless = true;
@@ -186,10 +190,25 @@ int main(int argc, char** argv) {
             requestedScene = argv[++i];
         } else if ((strcmp(argv[i], "--steps") == 0 || strcmp(argv[i], "-n") == 0) && i + 1 < argc) {
             steps = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--trace-frame") == 0 && i + 1 < argc) {
+            int f = atoi(argv[++i]);
+            if (solver) solver->debugSingleFrame = f;
+        } else if (strcmp(argv[i], "--trace-range") == 0 && i + 2 < argc) {
+            int a = atoi(argv[++i]);
+            int b = atoi(argv[++i]);
+            if (solver) { solver->debugRangeStart = a; solver->debugRangeEnd = b; }
+        } else if (strcmp(argv[i], "--trace-all") == 0) {
+            if (solver) solver->debugAllConstraints = true;
+        } else if (strcmp(argv[i], "--2dparams") == 0) {
+            use2DPreset = true; // apply after solver construction & before scenes
+        } else if (strcmp(argv[i], "--classic") == 0) {
+            useClassic = true;
+        } else if ((strcmp(argv[i], "--csv") == 0) && i + 1 < argc) {
+            csvPath = argv[++i];
         }
     }
 
-    solver = new Solver();
+    // solver already created prior to argument parsing
 
     int sceneIdx = currScene;
     if (requestedScene) {
@@ -202,6 +221,29 @@ int main(int argc, char** argv) {
     }
 
     scenes[sceneIdx](solver);
+
+    if (use2DPreset) {
+        solver->apply2DParamPreset();
+        printf("Applied 2D parameter preset (iterations=10, beta=100000, alpha=0.99, gamma=0.99, postStabilize=true)\n");
+    }
+    if (useClassic) {
+        solver->classicMode = true;
+        printf("Classic solver mode enabled (heuristics disabled).\n");
+    }
+    if (csvPath) {
+        solver->csvLogEnabled = true;
+        solver->csvLogPath = csvPath;
+        solver->csvLogFile = fopen(csvPath, "w");
+        if (solver->csvLogFile) {
+            // Updated header to include jitter diagnostics columns added in solver.cpp
+            fprintf(solver->csvLogFile, "frame,maxPen,avgEffPen,avgRawPen,avgPenalty,manifolds,contacts,jitRMSVel,jitRMSVelDelta,jitRMSVert,jitCOM,jitRMSContactN,topVy,totalLinCorr,manifoldsDropped,manifoldsResurrected\n");
+            fflush(solver->csvLogFile);
+            printf("CSV diagnostics logging to %s\n", csvPath);
+        } else {
+            fprintf(stderr, "Failed to open CSV log file: %s\n", csvPath);
+            solver->csvLogEnabled = false;
+        }
+    }
 
     if (headless) {
         // Headless mode: run physics and print body states each step
