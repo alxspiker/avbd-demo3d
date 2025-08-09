@@ -63,6 +63,22 @@ mat3 Rigid::getInvInertiaTensorWorld() const
     return R * invInertiaTensor * transpose(R);
 }
 
+mat3 Rigid::getInertiaTensorWorld() const
+{
+    // Compute the world-space inertia tensor from the inverse by inversion of the rotated inverse inertia tensor.
+    // Since invInertiaTensor is diagonal (or singular for static bodies), invert element-wise in local space, then rotate.
+    if (invMass <= 0.0f) {
+        return mat3({0,0,0}, {0,0,0}, {0,0,0});
+    }
+    // Recover local-space inertia by inverting the diagonal
+    mat3 I_local;
+    I_local.cols[0] = { invInertiaTensor.cols[0].x > 0 ? 1.0f / invInertiaTensor.cols[0].x : 0.0f, 0, 0 };
+    I_local.cols[1] = { 0, invInertiaTensor.cols[1].y > 0 ? 1.0f / invInertiaTensor.cols[1].y : 0.0f, 0 };
+    I_local.cols[2] = { 0, 0, invInertiaTensor.cols[2].z > 0 ? 1.0f / invInertiaTensor.cols[2].z : 0.0f };
+    mat3 R = mat3_from_quat(orientation);
+    return R * I_local * transpose(R);
+}
+
 bool Rigid::isConstrainedTo(Rigid* other) const
 {
     for (Force* f = forces; f != 0; f = (f->bodyA == this) ? f->nextA : f->nextB) {

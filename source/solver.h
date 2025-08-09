@@ -66,6 +66,7 @@ struct Rigid {
     ~Rigid();
 
     mat3 getInvInertiaTensorWorld() const;
+    mat3 getInertiaTensorWorld() const;
     bool isConstrainedTo(Rigid* other) const;
     void draw() const;
 };

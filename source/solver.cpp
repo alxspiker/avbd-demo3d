@@ -106,18 +106,12 @@ void Solver::step() {
 
         if (body->invMass > 0) {
             // Compute inertial state
-            body->inertialPosition = body->position + body->linearVelocity * dt + gravity * (dt * dt);
+            body->inertialPosition = body->position + body->linearVelocity * dt + gravity * (0.5f * dt * dt);
             quat w_q(body->angularVelocity.x, body->angularVelocity.y, body->angularVelocity.z, 0);
             body->inertialOrientation = normalize(body->orientation + (w_q * body->orientation) * (dt * 0.5f));
 
-            // Adaptive warm-starting
-            vec3 accel = (body->linearVelocity - body->prevLinearVelocity) / dt;
-            float accelExt = dot(accel, normalize(gravity));
-            float accelWeight = clamp(accelExt / length(gravity), 0.0f, 1.0f);
-            if (!std::isfinite(accelWeight)) accelWeight = 0.0f;
-
-            // Update current state to warm-started prediction
-            body->position += body->linearVelocity * dt + gravity * (accelWeight * dt * dt);
+            // Use pure inertial prediction without ad-hoc warm-start blending
+            body->position = body->inertialPosition;
             body->orientation = body->inertialOrientation;
         } else {
             body->inertialPosition = body->position;
@@ -135,7 +129,7 @@ void Solver::step() {
             if (body->invMass <= 0) continue;
 
             mat3 M = mat3::diagonal(body->mass);
-            mat3 I_world = transpose(body->getInvInertiaTensorWorld());
+            mat3 I_world = body->getInertiaTensorWorld();
 
             mat66 lhs = {};
             vec6 rhs = {};
@@ -163,10 +157,9 @@ void Solver::step() {
                     rhs.l += J_l * f;
                     rhs.a += J_a * f;
 
-                    mat3 G_a = mat3::diagonal(abs(cross(J_a, I_world * J_a)) * f);
-                    
+                    // Remove ad-hoc geometric stiffness term which had incorrect units and destabilized angular solve
                     lhs.ll += outer_product(J_l, J_l) * force->penalty[i];
-                    lhs.aa += outer_product(J_a, J_a) * force->penalty[i] + G_a;
+                    lhs.aa += outer_product(J_a, J_a) * force->penalty[i];
                 }
             }
 
