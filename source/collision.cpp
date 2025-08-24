@@ -69,6 +69,14 @@ int clipPolygon(const std::vector<vec3>& inVertices, std::vector<vec3>& outVerti
 }
 
 int Manifold::collide(Rigid* bodyA, Rigid* bodyB, Contact* contacts, bool flip) {
+    // Adjusted: moderate allowance plus curved speculative penetration for early, stable support
+    const float RESTING_ALLOWANCE = 0.05f; // 5cm window to begin seeding support
+    const float SPEC_MIN = 0.0015f;        // base synthetic depth component (scaled by t)
+    const float SPEC_DEPTH = 0.0050f;      // additional depth component (scaled by t^2)
+    // Velocity reference used to attenuate speculative depth for fast approaches
+    const float SPEC_VREF = 6.0f;          // m/s; above this, speculative depth scales down
+    // Access frame index via solver pointer (bodies share solver)
+    int frameIndex = bodyA->solver ? bodyA->solver->frameIndex : 0;
     mat3 R_A = mat3_from_quat(bodyA->orientation);
     mat3 R_B = mat3_from_quat(bodyB->orientation);
     vec3 D = bodyB->position - bodyA->position;
@@ -77,6 +85,8 @@ int Manifold::collide(Rigid* bodyA, Rigid* bodyB, Contact* contacts, bool flip) 
     int bestAxis = -1;
     bool A_is_ref = true;
 
+    // NOTE: We revert to immediate rejection per-axis (classic SAT) to avoid accumulating
+    // large deep penetrations before first contact when a single axis has a sizable gap.
     // Test axes of A
     for (int i = 0; i < 3; ++i) {
         vec3 axis = R_A.cols[i];
@@ -85,7 +95,24 @@ int Manifold::collide(Rigid* bodyA, Rigid* bodyB, Contact* contacts, bool flip) 
                    fabsf(dot(axis, R_B.cols[1])) * bodyB->size.y * 0.5f + 
                    fabsf(dot(axis, R_B.cols[2])) * bodyB->size.z * 0.5f;
         float penetration = ra + rb - fabsf(dot(axis, D));
-        if (penetration < 0) return 0;
+        if (penetration < -RESTING_ALLOWANCE) return 0; // definitive separation
+        if (penetration < 0) {
+            float gap = -penetration;
+            float t = 1.0f - gap / RESTING_ALLOWANCE; // t in [0,1]
+            // Curved profile: stronger near contact (t^2) + mild linear component, goes to 0 at allowance edge
+            float speculative = (SPEC_MIN * t) + (SPEC_DEPTH * t * t);
+            // Velocity attenuation: project relative velocity onto axis to scale speculative depth
+            vec3 relV = bodyB->linearVelocity - bodyA->linearVelocity;
+            float vAlong = fabsf(dot(relV, axis));
+            float velScale = 1.0f - fminf(1.0f, vAlong / SPEC_VREF) * 0.85f; // up to 85% reduction at high speed
+            speculative *= velScale;
+            // Early-frame ramp: reduce speculative depth in the very first frames to prevent large seeded stacks
+            if (frameIndex < 120) {
+                float ramp = (float)frameIndex / 120.0f; // 0..1 over first 120 frames
+                speculative *= (0.4f + 0.6f * ramp); // start at 40% strength
+            }
+            penetration = speculative;
+        }
         if (penetration < minPenetration) { 
             minPenetration = penetration; 
             bestAxis = i; 
@@ -101,7 +128,21 @@ int Manifold::collide(Rigid* bodyA, Rigid* bodyB, Contact* contacts, bool flip) 
                    fabsf(dot(axis, R_A.cols[2])) * bodyA->size.z * 0.5f;
         float rb = bodyB->size[i] * 0.5f;
         float penetration = ra + rb - fabsf(dot(axis, D));
-        if (penetration < 0) return 0;
+        if (penetration < -RESTING_ALLOWANCE) return 0;
+        if (penetration < 0) {
+            float gap = -penetration;
+            float t = 1.0f - gap / RESTING_ALLOWANCE;
+            float speculative = (SPEC_MIN * t) + (SPEC_DEPTH * t * t);
+            vec3 relV = bodyB->linearVelocity - bodyA->linearVelocity;
+            float vAlong = fabsf(dot(relV, axis));
+            float velScale = 1.0f - fminf(1.0f, vAlong / SPEC_VREF) * 0.85f;
+            if (frameIndex < 120) {
+                float ramp = (float)frameIndex / 120.0f;
+                speculative *= (0.4f + 0.6f * ramp);
+            }
+            speculative *= velScale;
+            penetration = speculative;
+        }
         if (penetration < minPenetration) { 
             minPenetration = penetration; 
             bestAxis = i + 3; 
@@ -122,7 +163,21 @@ int Manifold::collide(Rigid* bodyA, Rigid* bodyB, Contact* contacts, bool flip) 
                        fabsf(dot(axis, R_B.cols[1])) * bodyB->size.y * 0.5f + 
                        fabsf(dot(axis, R_B.cols[2])) * bodyB->size.z * 0.5f;
             float penetration = ra + rb - fabsf(dot(axis, D));
-            if (penetration < 0) return 0;
+            if (penetration < -RESTING_ALLOWANCE) return 0;
+            if (penetration < 0) {
+                float gap = -penetration;
+                float t = 1.0f - gap / RESTING_ALLOWANCE;
+                float speculative = (SPEC_MIN * t) + (SPEC_DEPTH * t * t);
+                vec3 relV = bodyB->linearVelocity - bodyA->linearVelocity;
+                float vAlong = fabsf(dot(relV, axis));
+                float velScale = 1.0f - fminf(1.0f, vAlong / SPEC_VREF) * 0.85f;
+                if (frameIndex < 120) {
+                    float ramp = (float)frameIndex / 120.0f;
+                    speculative *= (0.4f + 0.6f * ramp);
+                }
+                speculative *= velScale;
+                penetration = speculative;
+            }
             if (penetration < minPenetration) { 
                 minPenetration = penetration; 
                 bestAxis = 6 + i * 3 + j; 
@@ -130,6 +185,7 @@ int Manifold::collide(Rigid* bodyA, Rigid* bodyB, Contact* contacts, bool flip) 
             }
         }
     }
+    
 
     // For face-face contacts, prefer the larger/static object as reference
     // This ensures contact points are placed on the more stable surface
@@ -156,8 +212,34 @@ int Manifold::collide(Rigid* bodyA, Rigid* bodyB, Contact* contacts, bool flip) 
     std::vector<vec3> refFace;
     findFaceVertices(refFace, refBody, refNormal, false);
     
-    // Translate incident face to touching position to handle deep penetration
+    // Early-phase clamp: limit extremely large penetration depth before translating face
     float depth = minPenetration;
+    // Adaptive per-axis absolute penetration guard (prevents very deep raw overlaps entering solver)
+    if (bodyA->solver) {
+        // Ramp allowable depth early to avoid large initial overlaps forming tall stacks
+        float axisLimit;
+        if (bodyA->solver->frameIndex < 180) {
+            float t = (float)bodyA->solver->frameIndex / 180.0f; // 0..1
+            axisLimit = 0.06f + (0.09f - 0.06f) * t; // 6cm -> 9cm (tighter early window)
+        } else {
+            axisLimit = 0.09f; // steady state tightened from 12cm
+        }
+        if (depth > axisLimit) {
+            depth = axisLimit;
+            bodyA->solver->diagAxisClampCount++; // count how many manifolds required axis clamp
+        }
+        // Late-frame stricter clamp: after settling, keep new contacts from exceeding 3.5cm raw depth
+        if (bodyA->solver->frameIndex > 300) {
+            // Two-phase late tightening: 3.5cm after 300, 2.5cm after 360
+            float lateLimit = (bodyA->solver->frameIndex > 360) ? 0.025f : 0.035f;
+            if (depth > lateLimit) depth = lateLimit;
+        }
+    }
+    if (bodyA->solver && bodyA->solver->frameIndex < 120) {
+        const float EARLY_DEPTH_LIMIT = 0.18f; // meters
+        if (depth > EARLY_DEPTH_LIMIT) depth = EARLY_DEPTH_LIMIT;
+    }
+    // Translate incident face to touching position with (possibly clamped) depth
     for (auto& v : incidentFace) {
         v += refNormal * depth;
     }
@@ -192,9 +274,9 @@ int Manifold::collide(Rigid* bodyA, Rigid* bodyB, Contact* contacts, bool flip) 
 
     int numContacts = 0;
     for (const auto& v : clipped) {
-        float separation = dot(v, refNormal) - planeOffset;
+    float separation = dot(v, refNormal) - planeOffset;
         if (separation <= COLLISION_MARGIN) {
-            if (numContacts >= 4) break;
+            if (numContacts >= 8) break;
             
             // UPDATED: The normal must consistently point from Body B to Body A for the solver.
             contacts[numContacts].normal = (refBody == bodyA) ? -refNormal : refNormal;

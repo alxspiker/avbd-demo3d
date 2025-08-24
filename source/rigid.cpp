@@ -33,6 +33,9 @@ Rigid::Rigid(Solver* solver, const vec3& size, float density, float friction, co
     // Use maximum half-extent for broadphase radius instead of diagonal
     // This prevents false positives for elongated objects like ground planes
     radius = max(max(size.x, size.y), size.z) * 0.5f;
+    groundedContacts = 0;
+    supportLoad = 0.0f;
+    isBottomSupport = false;
 
     if (invMass > 0.0f) {
         float Ixx = (1.0f / 12.0f) * mass * (size.y * size.y + size.z * size.z);
