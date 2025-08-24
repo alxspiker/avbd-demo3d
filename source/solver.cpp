@@ -106,18 +106,12 @@ void Solver::step() {
 
         if (body->invMass > 0) {
             // Compute inertial state
-            body->inertialPosition = body->position + body->linearVelocity * dt + gravity * (dt * dt);
+            body->inertialPosition = body->position + body->linearVelocity * dt + gravity * (0.5f * dt * dt);
             quat w_q(body->angularVelocity.x, body->angularVelocity.y, body->angularVelocity.z, 0);
             body->inertialOrientation = normalize(body->orientation + (w_q * body->orientation) * (dt * 0.5f));
 
-            // Adaptive warm-starting
-            vec3 accel = (body->linearVelocity - body->prevLinearVelocity) / dt;
-            float accelExt = dot(accel, normalize(gravity));
-            float accelWeight = clamp(accelExt / length(gravity), 0.0f, 1.0f);
-            if (!std::isfinite(accelWeight)) accelWeight = 0.0f;
-
-            // Update current state to warm-started prediction
-            body->position += body->linearVelocity * dt + gravity * (accelWeight * dt * dt);
+            // Use pure inertial prediction without ad-hoc warm-start blending
+            body->position = body->inertialPosition;
             body->orientation = body->inertialOrientation;
         } else {
             body->inertialPosition = body->position;
@@ -126,7 +120,7 @@ void Solver::step() {
     }
 
     // --- 4. Main Iterative Solver Loop ---
-    int totalIterations = iterations + (postStabilize ? 1 : 0);
+         int totalIterations = max(12, iterations) + (postStabilize ? 1 : 0);
     for (int it = 0; it < totalIterations; ++it) {
         float currentAlpha = postStabilize ? (it < iterations ? 1.0f : 0.0f) : this->alpha;
 
@@ -135,7 +129,7 @@ void Solver::step() {
             if (body->invMass <= 0) continue;
 
             mat3 M = mat3::diagonal(body->mass);
-            mat3 I_world = transpose(body->getInvInertiaTensorWorld());
+            mat3 I_world = body->getInertiaTensorWorld();
 
             mat66 lhs = {};
             vec6 rhs = {};
@@ -163,10 +157,9 @@ void Solver::step() {
                     rhs.l += J_l * f;
                     rhs.a += J_a * f;
 
-                    mat3 G_a = mat3::diagonal(abs(cross(J_a, I_world * J_a)) * f);
-                    
+                    // Remove ad-hoc geometric stiffness term which had incorrect units and destabilized angular solve
                     lhs.ll += outer_product(J_l, J_l) * force->penalty[i];
-                    lhs.aa += outer_product(J_a, J_a) * force->penalty[i] + G_a;
+                    lhs.aa += outer_product(J_a, J_a) * force->penalty[i];
                 }
             }
 
@@ -186,7 +179,7 @@ void Solver::step() {
                     float lambda_i = clamp(force->penalty[i] * force->C[i] + force->lambda[i], force->fmin[i], force->fmax[i]);
                     force->lambda[i] = lambda_i;
                     if (force->lambda[i] > force->fmin[i] && force->lambda[i] < force->fmax[i]) {
-                         force->penalty[i] = min(force->penalty[i] + beta * abs(force->C[i]), PENALTY_MAX);
+                         force->penalty[i] = min(force->penalty[i] + beta * std::fabs(force->C[i]), PENALTY_MAX);
                     }
                 }
             }
@@ -212,7 +205,7 @@ void Solver::step() {
     // results. This created a positive feedback loop that injected massive amounts
     // of energy, causing bouncing and accelerating sliding. A single, non-iterative
     // pass is the correct approach for this type of post-correction step.
-    const int vel_iterations = 1;
+         const int vel_iterations = 3;
     for (int vel_it = 0; vel_it < vel_iterations; ++vel_it) { // This loop now effectively runs only once
         for (Force* force = forces; force; force = force->next) {
             if (!force->isManifold()) continue;
@@ -238,6 +231,9 @@ void Solver::step() {
                 float e = 0.0f;
                 float j = - (1.0f + e) * v_n / em;
 
+                // Accumulate normal impulse (RAII local clamp not needed here because we don't warmstart jn across frames)
+                m->contacts[i].jn += j;
+
                 vec3 impulse = j * n;
 
                 if (m->bodyA->invMass > 0) {
@@ -250,14 +246,14 @@ void Solver::step() {
                     m->bodyB->angularVelocity -= m->bodyB->getInvInertiaTensorWorld() * cross(world_rB, impulse);
                 }
 
-                // --- FIX: Implement Friction Impulse ---
+                // --- Friction Impulse with accumulation ---
                 // Re-calculate relative velocity after normal impulse
                 v_rel = (m->bodyA->linearVelocity + cross(m->bodyA->angularVelocity, world_rA)) -
                         (m->bodyB->linearVelocity + cross(m->bodyB->angularVelocity, world_rB));
 
                 // Create tangent vectors
                 vec3 tangent1, tangent2;
-                if (abs(n.x) > 0.9f) tangent1 = normalize(cross(n, vec3(0, 1, 0)));
+                if (std::fabs(n.x) > 0.9f) tangent1 = normalize(cross(n, vec3(0, 1, 0)));
                 else tangent1 = normalize(cross(n, vec3(1, 0, 0)));
                 tangent2 = normalize(cross(n, tangent1));
 
@@ -275,21 +271,32 @@ void Solver::step() {
                 float qb_t2 = dot(cross(Ib_t2, world_rB), tangent2);
                 float em_t2 = m->bodyA->invMass + m->bodyB->invMass + qa_t2 + qb_t2;
 
-                // Calculate friction impulse in each tangent direction
-                float jt1 = (em_t1 > 0) ? -dot(v_rel, tangent1) / em_t1 : 0.0f;
-                float jt2 = (em_t2 > 0) ? -dot(v_rel, tangent2) / em_t2 : 0.0f;
+                // Target velocity = 0 (Coulomb), compute impulse increments
+                float djt1 = (em_t1 > 0) ? -dot(v_rel, tangent1) / em_t1 : 0.0f;
+                float djt2 = (em_t2 > 0) ? -dot(v_rel, tangent2) / em_t2 : 0.0f;
 
-                // Clamp to friction cone
-                float friction_limit = m->combinedFriction * j;
-                float tangent_impulse_mag = sqrtf(jt1 * jt1 + jt2 * jt2);
-                if (tangent_impulse_mag > friction_limit) {
-                    float scale = friction_limit / tangent_impulse_mag;
-                    jt1 *= scale;
-                    jt2 *= scale;
+                // Accumulate then clamp to cone using max of instantaneous normal impulse and estimated constraint normal impulse over dt
+                float old_jt1 = m->contacts[i].jt1;
+                float old_jt2 = m->contacts[i].jt2;
+                float new_jt1 = old_jt1 + djt1;
+                float new_jt2 = old_jt2 + djt2;
+                float normal_lambda_mag = std::fabs(m->lambda[i*3 + 0]);
+                float normal_impulse_est = normal_lambda_mag * dt;
+                float friction_limit = m->combinedFriction * max(std::fabs(m->contacts[i].jn), normal_impulse_est);
+                float new_tangent_mag = sqrtf(new_jt1 * new_jt1 + new_jt2 * new_jt2);
+                if (new_tangent_mag > friction_limit) {
+                    float scale = (new_tangent_mag > 0.0f) ? (friction_limit / new_tangent_mag) : 0.0f;
+                    new_jt1 *= scale;
+                    new_jt2 *= scale;
                 }
+                // Delta to apply this iteration
+                float apply_djt1 = new_jt1 - old_jt1;
+                float apply_djt2 = new_jt2 - old_jt2;
+                m->contacts[i].jt1 = new_jt1;
+                m->contacts[i].jt2 = new_jt2;
 
-                // Apply friction impulse
-                vec3 friction_impulse = tangent1 * jt1 + tangent2 * jt2;
+                // Apply friction impulse (incremental)
+                vec3 friction_impulse = tangent1 * apply_djt1 + tangent2 * apply_djt2;
                 if (m->bodyA->invMass > 0) { m->bodyA->linearVelocity += m->bodyA->invMass * friction_impulse; m->bodyA->angularVelocity += m->bodyA->getInvInertiaTensorWorld() * cross(world_rA, friction_impulse); }
                 if (m->bodyB->invMass > 0) { m->bodyB->linearVelocity -= m->bodyB->invMass * friction_impulse; m->bodyB->angularVelocity -= m->bodyB->getInvInertiaTensorWorld() * cross(world_rB, friction_impulse); }
             }
