@@ -26,9 +26,6 @@
 #include <float.h>
 #include <stdio.h> // For printf
 
-// A small penetration tolerance to prevent jitter from solver over-correction.
-const float PENETRATION_SLOP = 0.001f; // 1mm
-
 Manifold::Manifold(Solver* solver, Rigid* bodyA, Rigid* bodyB)
     : Force(solver, bodyA, bodyB), numContacts(0)
 {
@@ -91,28 +88,21 @@ bool Manifold::initialize() {
     for (int i = 0; i < numContacts; ++i) {
         vec3 world_rA = rotate(bodyA->orientation, contacts[i].rA);
         vec3 world_rB = rotate(bodyB->orientation, contacts[i].rB);
-        
+
         vec3 pA = bodyA->position + world_rA;
         vec3 pB = bodyB->position + world_rB;
         vec3 normal = contacts[i].normal;
-        
-        // Precompute C0 - the constraint violation at the beginning of this frame
-        // Following 2D: C0 = basis * (pA - pB) + collision_margin
-        // Use the stored penetration depth from collision detection
-        contacts[i].C0_n = -contacts[i].penetration + PENETRATION_SLOP; // Negative because penetration is positive when objects overlap
-        
-        // For tangent directions (friction) - compute relative velocity projected onto tangent
-        vec3 vrel = (bodyA->linearVelocity + cross(bodyA->angularVelocity, world_rA)) -
-                    (bodyB->linearVelocity + cross(bodyB->angularVelocity, world_rB));
 
         vec3 tangent1, tangent2;
         if (abs(normal.x) > 0.9f) tangent1 = normalize(cross(normal, vec3(0, 1, 0)));
         else tangent1 = normalize(cross(normal, vec3(1, 0, 0)));
         tangent2 = normalize(cross(normal, tangent1));
 
-        contacts[i].C0_t.x = dot(vrel, tangent1);
-        contacts[i].C0_t.y = dot(vrel, tangent2);
-        contacts[i].C0_t.z = 0;
+        vec3 delta = pA - pB;
+        contacts[i].C0_n = dot(delta, normal) - PENETRATION_SLOP;
+        contacts[i].C0_t.x = dot(delta, tangent1);
+        contacts[i].C0_t.y = dot(delta, tangent2);
+        contacts[i].C0_t.z = 0.0f;
     }
     
     return true;
@@ -129,20 +119,25 @@ void Manifold::computeConstraint(float alpha) {
         vec3 pB = bodyB->position + world_rB;
         vec3 normal = contacts[i].normal;
         
-        // Compute separation distance along normal
-        // If normal points from B to A, then dot(pA - pB, normal) is positive when separated
-        float separation = dot(pA - pB, normal);
-        
-        // Constraint: we want separation >= PENETRATION_SLOP
-        // So C = separation - PENETRATION_SLOP
-        // When C < 0, objects are too close (violating constraint)
-        // When C >= 0, objects are properly separated (satisfying constraint)
-        C[i*3 + 0] = separation - PENETRATION_SLOP;
-        
-        // Disable friction in position solver
-        C[i*3 + 1] = 0.0f;
-        C[i*3 + 2] = 0.0f;
-        
+        vec3 delta = pA - pB;
+        float separation = dot(delta, normal);
+
+        vec3 tangent1, tangent2;
+        if (abs(normal.x) > 0.9f) tangent1 = normalize(cross(normal, vec3(0, 1, 0)));
+        else tangent1 = normalize(cross(normal, vec3(1, 0, 0)));
+        tangent2 = normalize(cross(normal, tangent1));
+
+        float slip1 = dot(delta, tangent1);
+        float slip2 = dot(delta, tangent2);
+
+        float biasN = (1.0f - alpha) * contacts[i].C0_n;
+        float biasT1 = (1.0f - alpha) * contacts[i].C0_t.x;
+        float biasT2 = (1.0f - alpha) * contacts[i].C0_t.y;
+
+        C[i*3 + 0] = biasN + separation - PENETRATION_SLOP;
+        C[i*3 + 1] = biasT1 + slip1;
+        C[i*3 + 2] = biasT2 + slip2;
+
         // --- Update Force Limits for Friction Cone ---
         float friction_limit = combinedFriction * abs(lambda[i*3 + 0]);
         fmin[i*3 + 1] = -friction_limit;
@@ -151,10 +146,11 @@ void Manifold::computeConstraint(float alpha) {
         fmax[i*3 + 2] =  friction_limit;
         fmin[i*3 + 0] = -FLT_MAX; // Allow negative forces (pushing apart)
         fmax[i*3 + 0] = 0;       // Prevent positive forces (pulling together)
-        
+
         // --- Sticking Logic ---
         float tangent_lambda = sqrtf(lambda[i*3+1]*lambda[i*3+1] + lambda[i*3+2]*lambda[i*3+2]);
-        contacts[i].stick = tangent_lambda < friction_limit && length(contacts[i].C0_t) < STICK_THRESH;
+        bool smallSlip = fabsf(C[i*3 + 1]) < STICK_THRESH && fabsf(C[i*3 + 2]) < STICK_THRESH;
+        contacts[i].stick = tangent_lambda < friction_limit && smallSlip;
     }
 }
 

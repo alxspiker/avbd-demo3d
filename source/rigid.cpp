@@ -38,12 +38,18 @@ Rigid::Rigid(Solver* solver, const vec3& size, float density, float friction, co
         float Ixx = (1.0f / 12.0f) * mass * (size.y * size.y + size.z * size.z);
         float Iyy = (1.0f / 12.0f) * mass * (size.x * size.x + size.z * size.z);
         float Izz = (1.0f / 12.0f) * mass * (size.x * size.x + size.y * size.y);
+        inertiaTensor = mat3(
+            {Ixx, 0, 0},
+            {0, Iyy, 0},
+            {0, 0, Izz}
+        );
         invInertiaTensor = mat3(
             {1.0f / Ixx, 0, 0},
             {0, 1.0f / Iyy, 0},
             {0, 0, 1.0f / Izz}
         );
     } else {
+        inertiaTensor = mat3({0,0,0}, {0,0,0}, {0,0,0});
         invInertiaTensor = mat3({0,0,0}, {0,0,0}, {0,0,0});
     }
 }
@@ -61,6 +67,12 @@ mat3 Rigid::getInvInertiaTensorWorld() const
 {
     mat3 R = mat3_from_quat(orientation);
     return R * invInertiaTensor * transpose(R);
+}
+
+mat3 Rigid::getInertiaTensorWorld() const
+{
+    mat3 R = mat3_from_quat(orientation);
+    return R * inertiaTensor * transpose(R);
 }
 
 bool Rigid::isConstrainedTo(Rigid* other) const
