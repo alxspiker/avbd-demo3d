@@ -93,6 +93,19 @@ void ui() {
     ImGui::SliderFloat("Gamma", &solver->gamma, 0.0f, 1.0f);
     ImGui::Checkbox("Post Stabilize", &solver->postStabilize);
 
+    ImGui::Separator();
+    ImGui::Checkbox("Physics Diagnostics", &solver->enableDiagnostics);
+    ImGui::SliderInt("Diagnostics Frequency (steps)", &solver->logFrequency, 1, 600);
+    const Solver::Diagnostics& stats = solver->lastDiagnostics;
+    ImGui::Text("Dynamic bodies: %d", stats.dynamicBodies);
+    ImGui::Text("Active manifolds: %d", stats.activeManifolds);
+    ImGui::Text("Active contacts: %d", stats.activeContacts);
+    ImGui::Text("Max penetration: %.6f", stats.maxPenetration);
+    ImGui::Text("Max constraint drift: %.6f", stats.maxConstraintViolation);
+    ImGui::Text("Max linear speed: %.3f", stats.maxLinearSpeed);
+    ImGui::Text("Max angular speed: %.3f", stats.maxAngularSpeed);
+    ImGui::Text("Max normal impulse: %.3f", stats.maxNormalImpulse);
+
     ImGui::End();
 }
 
@@ -190,6 +203,10 @@ int main(int argc, char** argv) {
     }
 
     solver = new Solver();
+    if (headless) {
+        solver->enableDiagnostics = true;
+        solver->logFrequency = 1;
+    }
 
     int sceneIdx = currScene;
     if (requestedScene) {
@@ -215,6 +232,16 @@ int main(int argc, char** argv) {
                 printf("LinVel(%.4f, %.4f, %.4f)  ", body->linearVelocity.x, body->linearVelocity.y, body->linearVelocity.z);
                 printf("AngVel(%.4f, %.4f, %.4f)\n", body->angularVelocity.x, body->angularVelocity.y, body->angularVelocity.z);
             }
+            const Solver::Diagnostics& stats = solver->lastDiagnostics;
+            printf("  Diagnostics: manifolds=%d contacts=%d dynBodies=%d maxPen=%.6f maxDrift=%.6f maxLin=%.3f maxAng=%.3f maxLambda=%.3f\n",
+                   stats.activeManifolds,
+                   stats.activeContacts,
+                   stats.dynamicBodies,
+                   stats.maxPenetration,
+                   stats.maxConstraintViolation,
+                   stats.maxLinearSpeed,
+                   stats.maxAngularSpeed,
+                   stats.maxNormalImpulse);
         }
         delete solver;
         return 0;

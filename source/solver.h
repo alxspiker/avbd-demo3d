@@ -28,6 +28,11 @@
 #define STICK_THRESH 0.02f
 #define SHOW_CONTACTS true
 
+// Allow a small amount of interpenetration before corrective impulses are applied.
+// This matches the tolerance used in the original AVBD 2D reference implementation
+// and makes it easier to monitor constraint drift across translation units.
+constexpr float PENETRATION_SLOP = 0.001f;
+
 // --- Forward Declarations ---
 struct Rigid;
 struct Force;
@@ -58,6 +63,7 @@ struct Rigid {
 
     vec3 size;
     float mass, invMass;
+    mat3 inertiaTensor;
     mat3 invInertiaTensor;
     float friction;
     float radius;
@@ -66,6 +72,7 @@ struct Rigid {
     ~Rigid();
 
     mat3 getInvInertiaTensorWorld() const;
+    mat3 getInertiaTensorWorld() const;
     bool isConstrainedTo(Rigid* other) const;
     void draw() const;
 };
@@ -133,6 +140,22 @@ struct Solver {
     bool postStabilize;
     Rigid* bodies;
     Force* forces;
+
+    struct Diagnostics {
+        float maxPenetration;
+        float maxConstraintViolation;
+        float maxLinearSpeed;
+        float maxAngularSpeed;
+        float maxNormalImpulse;
+        int activeContacts;
+        int activeManifolds;
+        int dynamicBodies;
+    };
+
+    bool enableDiagnostics;
+    int logFrequency;
+    int stepIndex;
+    Diagnostics lastDiagnostics;
 
     Solver();
     ~Solver();
