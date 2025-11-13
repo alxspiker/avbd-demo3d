@@ -4,9 +4,9 @@
 ![Language](https://img.shields.io/badge/language-C%2B%2B17-orange.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS%20%7C%20Web-brightgreen.svg)
 
-> **⚠️ ARCHIVED PROJECT**  
-> This project has been archived and is no longer actively maintained.  
-> **Please use [@IsaacLagoy/AVBD3D](https://github.com/IsaacLagoy/AVBD3D) instead, which is a better implementation.**
+> **⚠️ Breakthrough**  
+> Stable physics finally.  
+> **Please use [@IsaacLagoy/AVBD3D](https://github.com/IsaacLagoy/AVBD3D) for an alternative implementation.**
 
 **A comprehensive 3D conversion of the acclaimed AVBD 2D physics engine**
 
