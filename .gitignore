@@ -9,3 +9,4 @@ external/SDL/**
 *.tmp
 *.log
 imgui.ini
+vcpkg/
