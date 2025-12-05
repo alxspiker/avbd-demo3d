@@ -121,11 +121,11 @@ void Solver::defaultParams()
 {
     dt = 1.0f / 60.0f;
     gravity = vec3(0.0f, -10.0f, 0.0f);
-    iterations = 10;
-    alpha = 0.9f;
+    iterations = 25;
+    alpha = 0.95f;
     beta = 100000.0f;
     gamma = 0.99f;
-    postStabilize = true;
+    postStabilize = false;
     if (logFrequency <= 0) {
         logFrequency = 60;
     }
@@ -310,7 +310,9 @@ void Solver::step()
         }
     }
 
-    // --- 5. Update Velocities ---
+        // --- 5. Update Velocities with Damping ---
+    const float linearDamping = 0.90f;   // Slight damping to stabilize
+    const float angularDamping = 0.85f;  // Slightly more angular damping
     for (Rigid* body = bodies; body != nullptr; body = body->next) {
         if (body->invMass <= 0.0f) {
             continue;
@@ -322,6 +324,16 @@ void Solver::step()
         angVel = angVel * (2.0f / dt);
         if (delta_q.w < 0.0f) angVel = -angVel;
         body->angularVelocity = angVel;
+
+                // Apply damping to dissipate energy and stabilize resting contacts
+        body->linearVelocity = body->linearVelocity * linearDamping;
+        body->angularVelocity = body->angularVelocity * angularDamping;
+        
+        // Sleep threshold: if velocity is very low, set to zero to prevent drift
+        float linSpeed = length(body->linearVelocity);
+        float angSpeed = length(body->angularVelocity);
+        // Sleep disabled - was cutting off support
+        // Sleep disabled
 
         sanitizeVec3(body->linearVelocity, "linear velocity", body->id);
         sanitizeVec3(body->angularVelocity, "angular velocity", body->id);

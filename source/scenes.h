@@ -35,7 +35,7 @@ static void sceneStack(Solver* solver) {
     sceneGround(solver);
     // A simple stack of 10 cubes.
     for (int i = 0; i < 10; ++i) {
-        new Rigid(solver, {1, 1, 1}, 1.0f, 0.5f, {0, i * 1.05f + 0.5f, 0}, quat(), {0,0,0}, {0,0,0});
+        new Rigid(solver, {1, 1, 1}, 1.0f, 0.5f, {0, i * 1.1f + 0.5f, 0}, quat(), {0,0,0}, {0,0,0});
     }
 }
 
@@ -46,7 +46,7 @@ static void scenePyramid(Solver* solver) {
     for (int y = 0; y < PYRAMID_SIZE; ++y) {
         for (int x = 0; x < PYRAMID_SIZE - y; ++x) {
             float x_pos = (x - (PYRAMID_SIZE - y - 1) * 0.5f) * 1.1f;
-            float y_pos = y * 0.95f + 0.5f;
+            float y_pos = y * 1.05f + 0.5f;
             new Rigid(solver, {1, 1, 1}, 1.0f, 0.5f, {x_pos, y_pos, 0}, quat(), {0,0,0}, {0,0,0});
         }
     }

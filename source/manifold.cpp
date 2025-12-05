@@ -134,7 +134,7 @@ void Manifold::computeConstraint(float alpha) {
         float biasT1 = (1.0f - alpha) * contacts[i].C0_t.x;
         float biasT2 = (1.0f - alpha) * contacts[i].C0_t.y;
 
-        C[i*3 + 0] = biasN + separation - PENETRATION_SLOP;
+        C[i*3 + 0] = separation - PENETRATION_SLOP;  // Direct separation formula
         C[i*3 + 1] = biasT1 + slip1;
         C[i*3 + 2] = biasT2 + slip2;
 
