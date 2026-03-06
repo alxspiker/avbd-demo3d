@@ -71,6 +71,19 @@ static void sceneWall(Solver* solver) {
     }
 }
 
+static void sceneTwoBlockDrop(Solver* solver) {
+    solver->clear();
+    sceneGround(solver);
+
+    // Bottom block resting on ground.
+    new Rigid(solver, {1.0f, 1.0f, 1.0f}, 1.0f, 0.5f, {0.0f, 0.5f, 0.0f}, quat(), {0,0,0}, {0,0,0});
+
+    // Top block starts offset and tilted so it tips, lands, and should settle
+    // without spurious re-bounce.
+    quat tilt(vec3(0.0f, 0.0f, 1.0f), 0.45f);
+    new Rigid(solver, {1.0f, 1.0f, 1.0f}, 1.0f, 0.5f, {0.18f, 2.2f, 0.0f}, tilt, {0,0,0}, {0.0f, 0.0f, 1.0f});
+}
+
 // NOTE: The following scenes for Joints, Springs, etc., are placeholders.
 // They will cause compile errors until we define those Force types.
 // This is expected and part of the top-down design process.
@@ -129,6 +142,7 @@ static void (*scenes[])(Solver*) = {
     sceneStack,
     scenePyramid,
     sceneWall,
+    sceneTwoBlockDrop,
     sceneRod,
     sceneSoftBody
 };
@@ -140,6 +154,7 @@ static const char* sceneNames[] = {
     "Stack",
     "Pyramid",
     "Wall",
+    "TwoBlockDrop",
     "Rod (WIP)",
     "Soft Body (WIP)"
 };

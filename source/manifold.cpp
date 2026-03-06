@@ -15,6 +15,8 @@
 namespace {
 
 constexpr float NORMAL_CONTACT_MARGIN = 0.01f;
+constexpr float STICK_ANCHOR_MAX_DRIFT = 0.015f;
+constexpr float STICK_NORMAL_MIN_DOT = 0.995f;
 
 static vec3 worldContactPoint(const Rigid* body, const vec3& localPoint)
 {
@@ -114,7 +116,6 @@ bool Manifold::initialize()
 
         if (best >= 0) {
             oldUsed[best] = true;
-            contacts[i].stick = oldContacts[best].stick;
 
             for (int k = 0; k < 3; ++k) {
                 int row = base + k;
@@ -123,8 +124,23 @@ bool Manifold::initialize()
                 penalty[row] = clamp(oldPenalty[oldRow], PENALTY_MIN, PENALTY_MAX);
             }
 
-            // Preserve anchor points while sticking to reduce tangential jitter.
-            if (contacts[i].stick) {
+            bool reuseStickAnchors = false;
+            if (oldContacts[best].stick) {
+                vec3 newNormal = normalizeSafe(contacts[i].normal, vec3(0.0f, 1.0f, 0.0f));
+                vec3 oldNormal = normalizeSafe(oldContacts[best].normal, newNormal);
+                float normalDot = dot(newNormal, oldNormal);
+
+                vec3 oldMid = (worldContactPoint(bodyA, oldContacts[best].rA) + worldContactPoint(bodyB, oldContacts[best].rB)) * 0.5f;
+                vec3 newMid = (worldContactPoint(bodyA, contacts[i].rA) + worldContactPoint(bodyB, contacts[i].rB)) * 0.5f;
+                float driftSq = lengthSq(newMid - oldMid);
+
+                reuseStickAnchors = (normalDot >= STICK_NORMAL_MIN_DOT)
+                    && (driftSq <= STICK_ANCHOR_MAX_DRIFT * STICK_ANCHOR_MAX_DRIFT);
+            }
+
+            contacts[i].stick = oldContacts[best].stick && reuseStickAnchors;
+
+            if (reuseStickAnchors) {
                 contacts[i].rA = oldContacts[best].rA;
                 contacts[i].rB = oldContacts[best].rB;
             }
