@@ -56,10 +56,17 @@ static void sceneWall(Solver* solver) {
     solver->clear();
     sceneGround(solver);
     const int W = 8, H = 8;
+    const vec3 brickSize = {1.0f, 0.5f, 0.5f};
+    const float spacingX = 1.03f; // tiny gap to avoid immediate overconstraint spikes
+    const float spacingY = 0.52f;
+    const float baseY = brickSize.y * 0.5f;
+
     for (int i = 0; i < H; ++i) {
         for (int j = 0; j < W; ++j) {
-            float x_offset = (i % 2 == 0) ? 0.0f : 0.5f;
-            new Rigid(solver, {1, 0.5f, 0.5f}, 1.0f, 0.4f, {j - W/2.0f + x_offset, i * 0.5f + 0.25f, -5}, quat(), {0,0,0}, {0,0,0});
+            float x_offset = (i % 2 == 0) ? 0.0f : 0.5f * spacingX;
+            float x = (j - (W - 1) * 0.5f) * spacingX + x_offset;
+            float y = i * spacingY + baseY;
+            new Rigid(solver, brickSize, 1.0f, 0.4f, {x, y, -5}, quat(), {0,0,0}, {0,0,0});
         }
     }
 }
