@@ -89,6 +89,39 @@ static void clampAngularVelocity(vec3& w)
     }
 }
 
+static float rowPenaltyGain(const Force* force, int row, float beta)
+{
+    // Blend linear and angular penalty ramping (inspired by the original
+    // solver split into betaLin/betaAng) while preserving the current API.
+    constexpr float angularBetaScale = 0.01f;
+    constexpr float epsilon = 1.0e-8f;
+
+    float linearWeight = 0.0f;
+    float angularWeight = 0.0f;
+
+    auto accumulateWeights = [&](const Rigid* body) {
+        if (body == nullptr) {
+            return;
+        }
+        vec3 Jl, Ja;
+        force->computeDerivatives(Jl, Ja, body, row);
+        linearWeight += lengthSq(Jl);
+        angularWeight += lengthSq(Ja);
+    };
+
+    accumulateWeights(force->bodyA);
+    accumulateWeights(force->bodyB);
+
+    float totalWeight = linearWeight + angularWeight;
+    if (totalWeight < epsilon) {
+        return beta;
+    }
+
+    float betaLinear = beta;
+    float betaAngular = beta * angularBetaScale;
+    return (betaLinear * linearWeight + betaAngular * angularWeight) / totalWeight;
+}
+
 } // namespace
 
 Solver::Solver()
@@ -107,6 +140,91 @@ Solver::~Solver()
     clear();
 }
 
+Rigid* Solver::pick(const vec3& origin, const vec3& dir, vec3& local)
+{
+    const float epsilon = 1.0e-6f;
+    float bestT = FLT_MAX;
+    Rigid* bestBody = nullptr;
+    vec3 bestLocal;
+
+    vec3 rayDir = dir;
+    float dirLenSq = lengthSq(rayDir);
+    if (dirLenSq < epsilon) {
+        return nullptr;
+    }
+    rayDir = rayDir / sqrtf(dirLenSq);
+
+    // Ray-cast against each dynamic OBB by transforming the ray into local
+    // space and using slab intersection.
+    for (Rigid* body = bodies; body != nullptr; body = body->next) {
+        if (body->invMass <= 0.0f) {
+            continue;
+        }
+
+        quat invRot = conjugate(body->orientation);
+        vec3 localOrigin = rotate(invRot, origin - body->position);
+        vec3 localDir = rotate(invRot, rayDir);
+        vec3 half = body->size * 0.5f;
+
+        float tEnter = 0.0f;
+        float tExit = FLT_MAX;
+        bool hit = true;
+
+        for (int axis = 0; axis < 3; ++axis) {
+            float o = localOrigin[axis];
+            float d = localDir[axis];
+            float minB = -half[axis];
+            float maxB = half[axis];
+
+            if (fabsf(d) < epsilon) {
+                if (o < minB || o > maxB) {
+                    hit = false;
+                    break;
+                }
+                continue;
+            }
+
+            float invD = 1.0f / d;
+            float t0 = (minB - o) * invD;
+            float t1 = (maxB - o) * invD;
+            if (t0 > t1) {
+                float tmp = t0;
+                t0 = t1;
+                t1 = tmp;
+            }
+
+            tEnter = max(tEnter, t0);
+            tExit = min(tExit, t1);
+            if (tEnter > tExit) {
+                hit = false;
+                break;
+            }
+        }
+
+        if (!hit) {
+            continue;
+        }
+
+        float tHit = (tEnter >= 0.0f) ? tEnter : tExit;
+        if (tHit < 0.0f) {
+            continue;
+        }
+
+        if (tHit < bestT) {
+            bestT = tHit;
+            bestBody = body;
+            bestLocal = localOrigin + localDir * tHit;
+        }
+    }
+
+    if (bestBody == nullptr) {
+        return nullptr;
+    }
+
+    local = bestLocal;
+    return bestBody;
+}
+
 void Solver::clear()
 {
     while (forces) delete forces;
@@ -121,7 +239,7 @@ void Solver::defaultParams()
 {
     dt = 1.0f / 60.0f;
     gravity = vec3(0.0f, -10.0f, 0.0f);
-    iterations = 25;
+    iterations = 10;
     alpha = 0.95f;
     beta = 100000.0f;
     gamma = 0.99f;
@@ -177,8 +295,6 @@ void Solver::step()
 
     // --- 3. Predict Body States ---
     for (Rigid* body = bodies; body != nullptr; body = body->next) {
-        body->prevLinearVelocity = body->linearVelocity;
-        body->prevAngularVelocity = body->angularVelocity;
         clampAngularVelocity(body->angularVelocity);
 
         body->initialPosition = body->position;
@@ -303,7 +419,8 @@ void Solver::step()
                     bool active = lambdaUpdated > force->fmin[row] && lambdaUpdated < force->fmax[row];
                     force->lambda[row] = lambdaUpdated;
                     if (active) {
-                        force->penalty[row] = min(force->penalty[row] + beta * fabsf(force->C[row]), PENALTY_MAX);
+                        float betaRow = rowPenaltyGain(force, row, beta);
+                        force->penalty[row] = min(force->penalty[row] + betaRow * fabsf(force->C[row]), PENALTY_MAX);
                     }
                 }
             }
@@ -311,12 +428,16 @@ void Solver::step()
     }
 
         // --- 5. Update Velocities with Damping ---
-    const float linearDamping = 0.90f;   // Slight damping to stabilize
-    const float angularDamping = 0.85f;  // Slightly more angular damping
+    const float linearDamping = 0.995f;  // Keep responsive free-fall while damping residual jitter
+    const float angularDamping = 0.97f;  // Preserve rotational stability without overdamping
     for (Rigid* body = bodies; body != nullptr; body = body->next) {
         if (body->invMass <= 0.0f) {
             continue;
         }
+
+        // Keep previous step velocities for adaptive warm-start weighting.
+        body->prevLinearVelocity = body->linearVelocity;
+        body->prevAngularVelocity = body->angularVelocity;
 
         body->linearVelocity = (body->position - body->initialPosition) / dt;
         quat delta_q = body->orientation * conjugate(body->initialOrientation);

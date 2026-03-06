@@ -171,6 +171,9 @@ struct Solver {
   Solver();
   ~Solver();
 
+  // Ray-cast against dynamic OBB bodies and return the closest hit body.
+  // `local` is the body-local hit point.
+  Rigid *pick(const vec3 &origin, const vec3 &dir, vec3 &local);
   void clear();
   void defaultParams();
   void step();

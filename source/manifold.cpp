@@ -1,216 +1,275 @@
 /*
-* manifold.cpp - 3D AVBD Physics Engine
-*
-* CORRECTED: Implements full warm-starting with feature matching,
-* static friction, and pre-computation for stabilization.
-* Drawing code is now complete.
-* UPDATED: Simplified constraint violation to reduce bounciness.
-* UPDATED: Set stiffness to FLT_MAX for hard constraints to prevent falling through.
-* UPDATED: Removed isManifold() definition (moved to solver.h).
-* UPDATED: Flip C[0] sign to make C positive for penetration, reducing bounce.
-* UPDATED: Added debug print for C[0] in computeConstraint.
-* UPDATED: Changed C[0] to -separation - margin
-* UPDATED: Added Baumgarte stabilization
-* UPDATED: Flipped vrel to vA - vB
-* UPDATED: Updated debug print with separation
-* UPDATED: Moved vrel_now calculation before normal constraint to fix compile error
-* UPDATED: Changed sign in computeDerivatives to (body == bodyA) ? -1.0f : 1.0f to push in correct direction.
-* UPDATED: Changed C[0] to max(0.0f, separation - COLLISION_MARGIN) where separation positive for penetration.
-* UPDATED: Removed Baumgarte velocity term to prevent divergence and unit mismatch.
-* UPDATED: Flipped normal to point from B to A, and adjusted separation to dot(pB - pA, normal) for positive penetration.
-* CORRECTED: Disabled friction in the position-based solver to prevent energy gain and sliding.
-* CORRECTED: Added a small penetration slop to prevent jitter from solver over-correction.
-*/
+ * manifold.cpp - 3D AVBD Physics Engine
+ *
+ * Hybrid manifold constraints:
+ * - Keeps the current row-based solver interface.
+ * - Improves contact persistence (lambda + penalty carryover).
+ * - Uses stable tangent basis generation and friction cone projection.
+ */
 
 #include "solver.h"
-#include <float.h>
-#include <stdio.h> // For printf
+
+#include <cfloat>
+#include <cmath>
+
+namespace {
+
+constexpr float NORMAL_CONTACT_MARGIN = 0.01f;
+
+static vec3 worldContactPoint(const Rigid* body, const vec3& localPoint)
+{
+    return body->position + rotate(body->orientation, localPoint);
+}
+
+static vec3 normalizeSafe(const vec3& v, const vec3& fallback)
+{
+    float lenSq = lengthSq(v);
+    if (lenSq < VEC_EPSILON) {
+        return fallback;
+    }
+    return v / sqrtf(lenSq);
+}
+
+static void buildContactBasis(const vec3& normalIn, vec3& normal, vec3& tangent1, vec3& tangent2)
+{
+    normal = normalizeSafe(normalIn, vec3(0.0f, 1.0f, 0.0f));
+
+    if (fabsf(normal.x) >= fabsf(normal.z)) {
+        tangent1 = vec3(-normal.y, normal.x, 0.0f);
+    } else {
+        tangent1 = vec3(0.0f, -normal.z, normal.y);
+    }
+    tangent1 = normalizeSafe(tangent1, vec3(1.0f, 0.0f, 0.0f));
+    tangent2 = normalizeSafe(cross(normal, tangent1), vec3(0.0f, 0.0f, 1.0f));
+}
+
+} // namespace
 
 Manifold::Manifold(Solver* solver, Rigid* bodyA, Rigid* bodyB)
-    : Force(solver, bodyA, bodyB), numContacts(0)
+    : Force(solver, bodyA, bodyB)
+    , numContacts(0)
+    , combinedFriction(0.0f)
 {
-    // The constructor is minimal, all work is done in initialize
     for (int i = 0; i < 4; ++i) {
         contacts[i].C0_n = 0.0f;
-        contacts[i].C0_t = vec3{0, 0, 0};
+        contacts[i].C0_t = vec3();
+        contacts[i].stick = false;
     }
 }
 
-int Manifold::getRowCount() const {
-    return numContacts * 3; // 1 Normal, 2 Tangent friction rows per contact
+int Manifold::getRowCount() const
+{
+    return numContacts * 3; // 1 normal + 2 tangents per contact
 }
 
-bool Manifold::initialize() {
+bool Manifold::initialize()
+{
     combinedFriction = sqrtf(bodyA->friction * bodyB->friction);
 
-    // --- Warm Starting Cache ---
+    // Cache previous manifold rows for warmstart carryover.
     Contact oldContacts[4];
     float oldLambda[12];
+    float oldPenalty[12];
+    bool oldUsed[4] = {false, false, false, false};
     int oldNumContacts = numContacts;
-    for (int i = 0; i < oldNumContacts; ++i) oldContacts[i] = contacts[i];
-    for (int i = 0; i < oldNumContacts * 3; ++i) oldLambda[i] = lambda[i];
 
-    // --- Get New Contacts ---
+    for (int i = 0; i < oldNumContacts; ++i) {
+        oldContacts[i] = contacts[i];
+        for (int k = 0; k < 3; ++k) {
+            int row = i * 3 + k;
+            oldLambda[row] = lambda[row];
+            oldPenalty[row] = penalty[row];
+        }
+    }
+
+    // Build new contact manifold.
     numContacts = Manifold::collide(bodyA, bodyB, contacts, false);
     if (numContacts == 0) {
         return false;
     }
 
-    // Set stiffness to FLT_MAX for hard constraints (normal and friction)
-    for (int i = 0; i < getRowCount(); ++i) {
-        stiffness[i] = FLT_MAX;
-    }
-
-    // --- Match New Contacts with Old for Warm Starting ---
+    // Initialize all rows and transfer warmstart data by exact feature id.
     for (int i = 0; i < numContacts; ++i) {
-        lambda[i*3 + 0] = lambda[i*3 + 1] = lambda[i*3 + 2] = 0.0f;
-        penalty[i*3 + 0] = penalty[i*3 + 1] = penalty[i*3 + 2] = PENALTY_MIN;
+        int base = i * 3;
+        for (int k = 0; k < 3; ++k) {
+            int row = base + k;
+            stiffness[row] = FLT_MAX;
+            lambda[row] = 0.0f;
+            penalty[row] = PENALTY_MIN;
+            motor[row] = 0.0f;
+        }
         contacts[i].stick = false;
 
+        int best = -1;
+
         for (int j = 0; j < oldNumContacts; ++j) {
+            if (oldUsed[j]) {
+                continue;
+            }
             if (contacts[i].feature.value == oldContacts[j].feature.value) {
-                lambda[i*3 + 0] = oldLambda[j*3 + 0];
-                lambda[i*3 + 1] = oldLambda[j*3 + 1];
-                lambda[i*3 + 2] = oldLambda[j*3 + 2];
-                contacts[i].stick = oldContacts[j].stick;
-                
-                // For sticking contacts, reuse the exact previous contact points
-                if(contacts[i].stick) {
-                    contacts[i].rA = oldContacts[j].rA;
-                    contacts[i].rB = oldContacts[j].rB;
-                }
+                best = j;
                 break;
             }
         }
-    }
 
-    // --- Pre-computation for Taylor Series Approximation (following 2D reference) ---
-    for (int i = 0; i < numContacts; ++i) {
-        vec3 world_rA = rotate(bodyA->orientation, contacts[i].rA);
-        vec3 world_rB = rotate(bodyB->orientation, contacts[i].rB);
+        if (best >= 0) {
+            oldUsed[best] = true;
+            contacts[i].stick = oldContacts[best].stick;
 
-        vec3 pA = bodyA->position + world_rA;
-        vec3 pB = bodyB->position + world_rB;
-        vec3 normal = contacts[i].normal;
+            for (int k = 0; k < 3; ++k) {
+                int row = base + k;
+                int oldRow = best * 3 + k;
+                lambda[row] = oldLambda[oldRow];
+                penalty[row] = clamp(oldPenalty[oldRow], PENALTY_MIN, PENALTY_MAX);
+            }
 
-        vec3 tangent1, tangent2;
-        if (abs(normal.x) > 0.9f) tangent1 = normalize(cross(normal, vec3(0, 1, 0)));
-        else tangent1 = normalize(cross(normal, vec3(1, 0, 0)));
-        tangent2 = normalize(cross(normal, tangent1));
+            // Preserve anchor points while sticking to reduce tangential jitter.
+            if (contacts[i].stick) {
+                contacts[i].rA = oldContacts[best].rA;
+                contacts[i].rB = oldContacts[best].rB;
+            }
+        }
 
+        // Cache q- violation for alpha stabilization during this step.
+        vec3 normal, tangent1, tangent2;
+        buildContactBasis(contacts[i].normal, normal, tangent1, tangent2);
+        contacts[i].normal = normal;
+
+        vec3 pA = worldContactPoint(bodyA, contacts[i].rA);
+        vec3 pB = worldContactPoint(bodyB, contacts[i].rB);
         vec3 delta = pA - pB;
-        contacts[i].C0_n = dot(delta, normal) - PENETRATION_SLOP;
+        // Use a small speculative margin to keep resting contacts active.
+        contacts[i].C0_n = dot(delta, normal) - NORMAL_CONTACT_MARGIN;
         contacts[i].C0_t.x = dot(delta, tangent1);
         contacts[i].C0_t.y = dot(delta, tangent2);
         contacts[i].C0_t.z = 0.0f;
+        contacts[i].penetration = max(0.0f, -dot(delta, normal));
     }
-    
+
     return true;
 }
 
-void Manifold::computeConstraint(float alpha) {
+void Manifold::computeConstraint(float alpha)
+{
+    float biasScale = clamp(1.0f - alpha, 0.0f, 1.0f);
+
     for (int i = 0; i < numContacts; ++i) {
-        // --- Simple, Direct Constraint Calculation ---
-        // Goal: C = 0 when objects are just touching, C < 0 when penetrating
-        
-        vec3 world_rA = rotate(bodyA->orientation, contacts[i].rA);
-        vec3 world_rB = rotate(bodyB->orientation, contacts[i].rB);
-        vec3 pA = bodyA->position + world_rA;
-        vec3 pB = bodyB->position + world_rB;
-        vec3 normal = contacts[i].normal;
-        
+        int base = i * 3;
+
+        vec3 normal, tangent1, tangent2;
+        buildContactBasis(contacts[i].normal, normal, tangent1, tangent2);
+        contacts[i].normal = normal;
+
+        vec3 pA = worldContactPoint(bodyA, contacts[i].rA);
+        vec3 pB = worldContactPoint(bodyB, contacts[i].rB);
         vec3 delta = pA - pB;
-        float separation = dot(delta, normal);
 
-        vec3 tangent1, tangent2;
-        if (abs(normal.x) > 0.9f) tangent1 = normalize(cross(normal, vec3(0, 1, 0)));
-        else tangent1 = normalize(cross(normal, vec3(1, 0, 0)));
-        tangent2 = normalize(cross(normal, tangent1));
-
+        // Preserve near-contact support to reduce stack/pyramid jitter.
+        float separation = dot(delta, normal) - NORMAL_CONTACT_MARGIN;
         float slip1 = dot(delta, tangent1);
         float slip2 = dot(delta, tangent2);
 
-        float biasN = (1.0f - alpha) * contacts[i].C0_n;
-        float biasT1 = (1.0f - alpha) * contacts[i].C0_t.x;
-        float biasT2 = (1.0f - alpha) * contacts[i].C0_t.y;
+        // Normal row (unilateral compression only).
+        C[base + 0] = separation + biasScale * contacts[i].C0_n;
+        fmin[base + 0] = -FLT_MAX;
+        fmax[base + 0] = 0.0f;
 
-        C[i*3 + 0] = separation - PENETRATION_SLOP;  // Direct separation formula
-        C[i*3 + 1] = biasT1 + slip1;
-        C[i*3 + 2] = biasT2 + slip2;
+        // Tangential rows (friction).
+        C[base + 1] = slip1 + biasScale * contacts[i].C0_t.x;
+        C[base + 2] = slip2 + biasScale * contacts[i].C0_t.y;
 
-        // --- Update Force Limits for Friction Cone ---
-        float friction_limit = combinedFriction * abs(lambda[i*3 + 0]);
-        fmin[i*3 + 1] = -friction_limit;
-        fmax[i*3 + 1] =  friction_limit;
-        fmin[i*3 + 2] = -friction_limit;
-        fmax[i*3 + 2] =  friction_limit;
-        fmin[i*3 + 0] = -FLT_MAX; // Allow negative forces (pushing apart)
-        fmax[i*3 + 0] = 0;       // Prevent positive forces (pulling together)
+        // Use a trial normal force (same pass as savant's manifold update) to
+        // set a dynamic friction cone bound.
+        float warmNormalMagnitude = fabsf(min(lambda[base + 0], 0.0f));
+        float trialNormal = penalty[base + 0] * C[base + 0] + lambda[base + 0];
+        float trialNormalMagnitude = fabsf(min(trialNormal, 0.0f));
+        float normalMagnitude = max(warmNormalMagnitude, trialNormalMagnitude);
 
-        // --- Sticking Logic ---
-        float tangent_lambda = sqrtf(lambda[i*3+1]*lambda[i*3+1] + lambda[i*3+2]*lambda[i*3+2]);
-        bool smallSlip = fabsf(C[i*3 + 1]) < STICK_THRESH && fabsf(C[i*3 + 2]) < STICK_THRESH;
-        contacts[i].stick = tangent_lambda < friction_limit && smallSlip;
+        float mu = combinedFriction;
+        if (!contacts[i].stick) {
+            mu *= 0.9f; // Slight kinetic friction drop
+        }
+        float frictionLimit = mu * normalMagnitude;
+
+        // Keep warmstarted tangential impulses inside the current cone.
+        float lt1 = lambda[base + 1];
+        float lt2 = lambda[base + 2];
+        float tanMag = sqrtf(lt1 * lt1 + lt2 * lt2);
+        if (tanMag > frictionLimit && tanMag > 1.0e-8f) {
+            float s = frictionLimit / tanMag;
+            lambda[base + 1] *= s;
+            lambda[base + 2] *= s;
+        }
+
+        fmin[base + 1] = -frictionLimit;
+        fmax[base + 1] = frictionLimit;
+        fmin[base + 2] = -frictionLimit;
+        fmax[base + 2] = frictionLimit;
+
+        float slipMagSq = C[base + 1] * C[base + 1] + C[base + 2] * C[base + 2];
+        float tanLambdaSq = lambda[base + 1] * lambda[base + 1] + lambda[base + 2] * lambda[base + 2];
+        float stickThreshSq = STICK_THRESH * STICK_THRESH;
+        contacts[i].stick = (slipMagSq <= stickThreshSq) && (tanLambdaSq <= frictionLimit * frictionLimit + 1.0e-8f);
+
+        contacts[i].penetration = max(0.0f, -dot(delta, normal));
     }
 }
 
+void Manifold::computeDerivatives(vec3& J_linear, vec3& J_angular, const Rigid* body, int row) const
+{
+    int contactIdx = row / 3;
+    int type = row % 3;
+    const Contact& contact = contacts[contactIdx];
 
-void Manifold::computeDerivatives(vec3& J_linear, vec3& J_angular, const Rigid* body, int row) const {
-    int contact_idx = row / 3;
-    int constraint_type = row % 3;
+    vec3 normal, tangent1, tangent2;
+    buildContactBasis(contact.normal, normal, tangent1, tangent2);
 
-    const Contact& c = contacts[contact_idx];
-    vec3 world_r = (body == bodyA) ? rotate(body->orientation, c.rA) : rotate(body->orientation, c.rB);
-
-    vec3 normal = c.normal;
-    vec3 tangent1, tangent2;
-    if (abs(normal.x) > 0.9f) tangent1 = normalize(cross(normal, vec3(0, 1, 0)));
-    else tangent1 = normalize(cross(normal, vec3(1, 0, 0)));
-    tangent2 = normalize(cross(normal, tangent1));
-    
     vec3 basis;
-    if (constraint_type == 0) basis = normal;
-    else if (constraint_type == 1) basis = tangent1;
-    else basis = tangent2;
-    
-    float sign = (body == bodyA) ? 1.0f : -1.0f; // Follow 2D reference: +normal for A, -normal for B
-    
+    if (type == 0) {
+        basis = normal;
+    } else if (type == 1) {
+        basis = tangent1;
+    } else {
+        basis = tangent2;
+    }
+
+    float sign = (body == bodyA) ? 1.0f : -1.0f;
+    vec3 worldR = (body == bodyA) ? rotate(bodyA->orientation, contact.rA)
+                                  : rotate(bodyB->orientation, contact.rB);
+
     J_linear = basis * sign;
-    J_angular = cross(world_r, basis) * sign;
+    J_angular = cross(worldR, basis) * sign;
 }
 
 void Manifold::draw() const
 {
-    if (!SHOW_CONTACTS) return;
+    if (!SHOW_CONTACTS) {
+        return;
+    }
 
     glDisable(GL_LIGHTING);
     glPointSize(6.0f);
     glLineWidth(2.0f);
 
     for (int i = 0; i < numContacts; ++i) {
-        // Calculate the world-space contact points from both bodies' perspectives
-        vec3 pA = bodyA->position + rotate(bodyA->orientation, contacts[i].rA);
-        vec3 pB = bodyB->position + rotate(bodyB->orientation, contacts[i].rB);
-        
-        // The midpoint is a good representation of the contact location
-        vec3 p_mid = (pA + pB) * 0.5f;
+        vec3 pA = worldContactPoint(bodyA, contacts[i].rA);
+        vec3 pB = worldContactPoint(bodyB, contacts[i].rB);
+        vec3 pMid = (pA + pB) * 0.5f;
 
-        // Draw the contact point itself. Yellow for sticking, purple for sliding.
-        if(contacts[i].stick) {
-            glColor3f(1.0f, 1.0f, 0.0f); // Yellow = Sticking
+        if (contacts[i].stick) {
+            glColor3f(1.0f, 1.0f, 0.0f); // sticking: yellow
         } else {
-            glColor3f(0.8f, 0.2f, 0.8f); // Purple = Sliding
+            glColor3f(0.8f, 0.2f, 0.8f); // sliding: purple
         }
-        
+
         glBegin(GL_POINTS);
-        glVertex3fv(&p_mid.x);
+        glVertex3fv(&pMid.x);
         glEnd();
-        
-        // Draw the contact normal in red to show the direction of repulsive force.
+
         glColor3f(1.0f, 0.2f, 0.2f);
         glBegin(GL_LINES);
-        glVertex3fv(&p_mid.x);
-        vec3 end = p_mid + contacts[i].normal * 0.5f; // Draw normal with length 0.5 for visibility
+        glVertex3fv(&pMid.x);
+        vec3 end = pMid + contacts[i].normal * 0.5f;
         glVertex3fv(&end.x);
         glEnd();
     }
