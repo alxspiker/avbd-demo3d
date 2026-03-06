@@ -84,6 +84,53 @@ static void sceneTwoBlockDrop(Solver* solver) {
     new Rigid(solver, {1.0f, 1.0f, 1.0f}, 1.0f, 0.5f, {0.18f, 2.2f, 0.0f}, tilt, {0,0,0}, {0.0f, 0.0f, 1.0f});
 }
 
+static void sceneStress1000(Solver* solver) {
+    solver->clear();
+    sceneGround(solver);
+
+    // Stress scene tuning: more solver work and gentler penalty ramping for
+    // massive simultaneous contact events.
+    solver->iterations = 20;
+    solver->beta = 30000.0f;
+    solver->gamma = 0.995f;
+
+    // 10 x 10 x 10 = 1000 dynamic blocks dropping from high altitude.
+    const int NX = 10;
+    const int NY = 10;
+    const int NZ = 10;
+    const vec3 size = {1.0f, 1.0f, 1.0f};
+    const float spacingXZ = 1.15f;
+    const float spacingY = 2.0f;
+    const float startY = 20.0f;
+    const float jitterXZ = 0.04f;
+    const float jitterY = 0.25f;
+
+    auto hashFloat01 = [](unsigned int x) {
+        x ^= x >> 16;
+        x *= 0x7feb352dU;
+        x ^= x >> 15;
+        x *= 0x846ca68bU;
+        x ^= x >> 16;
+        return (x & 0x00FFFFFFU) / 16777215.0f;
+    };
+
+    for (int y = 0; y < NY; ++y) {
+        for (int z = 0; z < NZ; ++z) {
+            for (int x = 0; x < NX; ++x) {
+                unsigned int seed = (unsigned int)(x + NX * (z + NZ * y) + 1);
+                float jx = (hashFloat01(seed * 9781U) * 2.0f - 1.0f) * jitterXZ;
+                float jz = (hashFloat01(seed * 6271U) * 2.0f - 1.0f) * jitterXZ;
+                float jy = hashFloat01(seed * 3343U) * jitterY;
+
+                float px = (x - (NX - 1) * 0.5f) * spacingXZ + jx;
+                float py = startY + y * spacingY + jy;
+                float pz = (z - (NZ - 1) * 0.5f) * spacingXZ + jz;
+                new Rigid(solver, size, 1.0f, 0.5f, {px, py, pz}, quat(), {0, 0, 0}, {0, 0, 0});
+            }
+        }
+    }
+}
+
 // NOTE: The following scenes for Joints, Springs, etc., are placeholders.
 // They will cause compile errors until we define those Force types.
 // This is expected and part of the top-down design process.
@@ -143,6 +190,7 @@ static void (*scenes[])(Solver*) = {
     scenePyramid,
     sceneWall,
     sceneTwoBlockDrop,
+    sceneStress1000,
     sceneRod,
     sceneSoftBody
 };
@@ -155,6 +203,7 @@ static const char* sceneNames[] = {
     "Pyramid",
     "Wall",
     "TwoBlockDrop",
+    "Stress1000",
     "Rod (WIP)",
     "Soft Body (WIP)"
 };

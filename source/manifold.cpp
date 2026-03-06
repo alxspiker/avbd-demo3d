@@ -17,6 +17,10 @@ namespace {
 constexpr float NORMAL_CONTACT_MARGIN = 0.01f;
 constexpr float STICK_ANCHOR_MAX_DRIFT = 0.015f;
 constexpr float STICK_NORMAL_MIN_DOT = 0.995f;
+constexpr float WARMSTART_MAX_DRIFT = 0.08f;
+constexpr float WARMSTART_NORMAL_MIN_DOT = 0.9f;
+constexpr float MANIFOLD_NORMAL_FORCE_CAP = 5000.0f;
+constexpr float MANIFOLD_PENALTY_CAP = 2000000.0f;
 
 static vec3 worldContactPoint(const Rigid* body, const vec3& localPoint)
 {
@@ -117,23 +121,28 @@ bool Manifold::initialize()
         if (best >= 0) {
             oldUsed[best] = true;
 
-            for (int k = 0; k < 3; ++k) {
-                int row = base + k;
-                int oldRow = best * 3 + k;
-                lambda[row] = oldLambda[oldRow];
-                penalty[row] = clamp(oldPenalty[oldRow], PENALTY_MIN, PENALTY_MAX);
+            vec3 newNormal = normalizeSafe(contacts[i].normal, vec3(0.0f, 1.0f, 0.0f));
+            vec3 oldNormal = normalizeSafe(oldContacts[best].normal, newNormal);
+            float normalDot = dot(newNormal, oldNormal);
+
+            vec3 oldMid = (worldContactPoint(bodyA, oldContacts[best].rA) + worldContactPoint(bodyB, oldContacts[best].rB)) * 0.5f;
+            vec3 newMid = (worldContactPoint(bodyA, contacts[i].rA) + worldContactPoint(bodyB, contacts[i].rB)) * 0.5f;
+            float driftSq = lengthSq(newMid - oldMid);
+
+            bool validWarmstart = (normalDot >= WARMSTART_NORMAL_MIN_DOT)
+                && (driftSq <= WARMSTART_MAX_DRIFT * WARMSTART_MAX_DRIFT);
+
+            if (validWarmstart) {
+                for (int k = 0; k < 3; ++k) {
+                    int row = base + k;
+                    int oldRow = best * 3 + k;
+                    lambda[row] = oldLambda[oldRow];
+                    penalty[row] = clamp(oldPenalty[oldRow], PENALTY_MIN, MANIFOLD_PENALTY_CAP);
+                }
             }
 
             bool reuseStickAnchors = false;
-            if (oldContacts[best].stick) {
-                vec3 newNormal = normalizeSafe(contacts[i].normal, vec3(0.0f, 1.0f, 0.0f));
-                vec3 oldNormal = normalizeSafe(oldContacts[best].normal, newNormal);
-                float normalDot = dot(newNormal, oldNormal);
-
-                vec3 oldMid = (worldContactPoint(bodyA, oldContacts[best].rA) + worldContactPoint(bodyB, oldContacts[best].rB)) * 0.5f;
-                vec3 newMid = (worldContactPoint(bodyA, contacts[i].rA) + worldContactPoint(bodyB, contacts[i].rB)) * 0.5f;
-                float driftSq = lengthSq(newMid - oldMid);
-
+            if (oldContacts[best].stick && validWarmstart) {
                 reuseStickAnchors = (normalDot >= STICK_NORMAL_MIN_DOT)
                     && (driftSq <= STICK_ANCHOR_MAX_DRIFT * STICK_ANCHOR_MAX_DRIFT);
             }
@@ -187,7 +196,10 @@ void Manifold::computeConstraint(float alpha)
 
         // Normal row (unilateral compression only).
         C[base + 0] = separation + biasScale * contacts[i].C0_n;
-        fmin[base + 0] = -FLT_MAX;
+        float invMassSum = bodyA->invMass + bodyB->invMass;
+        float massScale = (invMassSum > 1.0e-6f) ? (1.0f / invMassSum) : 1.0f;
+        float normalForceCap = MANIFOLD_NORMAL_FORCE_CAP * massScale;
+        fmin[base + 0] = -normalForceCap;
         fmax[base + 0] = 0.0f;
 
         // Tangential rows (friction).
@@ -200,6 +212,7 @@ void Manifold::computeConstraint(float alpha)
         float trialNormal = penalty[base + 0] * C[base + 0] + lambda[base + 0];
         float trialNormalMagnitude = fabsf(min(trialNormal, 0.0f));
         float normalMagnitude = max(warmNormalMagnitude, trialNormalMagnitude);
+        normalMagnitude = min(normalMagnitude, normalForceCap);
 
         float mu = combinedFriction;
         if (!contacts[i].stick) {

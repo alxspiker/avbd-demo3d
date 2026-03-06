@@ -26,6 +26,8 @@ struct mat66 {
     mat3 aa;
 };
 
+constexpr float MANIFOLD_PENALTY_CAP = 2000000.0f;
+
 static mat3 zeroMatrix()
 {
     return mat3(vec3(), vec3(), vec3());
@@ -420,7 +422,8 @@ void Solver::step()
                     force->lambda[row] = lambdaUpdated;
                     if (active) {
                         float betaRow = rowPenaltyGain(force, row, beta);
-                        force->penalty[row] = min(force->penalty[row] + betaRow * fabsf(force->C[row]), PENALTY_MAX);
+                        float penaltyCap = force->isManifold() ? MANIFOLD_PENALTY_CAP : PENALTY_MAX;
+                        force->penalty[row] = min(force->penalty[row] + betaRow * fabsf(force->C[row]), penaltyCap);
                     }
                 }
             }
