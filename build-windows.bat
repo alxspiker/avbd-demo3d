@@ -71,4 +71,21 @@ echo === Build Complete ===
 echo Executable: %cd%\Release\avbd_demo3d.exe
 echo Run with: build\Release\avbd_demo3d.exe
 
+REM Package a release-ready zip: exe + SDL2.dll (fixes issue #8 - "SDL2.dll not found")
+REM The pre-release failed because only the .exe was uploaded without its SDL2 runtime.
+echo Packaging Windows release zip...
+set PKGDIR=%cd%\package
+if exist "%PKGDIR%" rmdir /s /q "%PKGDIR%"
+mkdir "%PKGDIR%"
+copy /y Release\avbd_demo3d.exe "%PKGDIR%\" >nul
+copy /y Release\SDL2.dll "%PKGDIR%\" >nul
+if not exist "%PKGDIR%\SDL2.dll" (
+    echo WARNING: SDL2.dll was not found next to the executable. The zip will be missing it.
+) else (
+    echo SDL2.dll bundled into the package.
+)
+powershell -NoProfile -Command "Compress-Archive -Force -Path '%PKGDIR%\*' -DestinationPath '%cd%\avbd-demo3d-windows.zip'"
+echo Release package: %cd%\avbd-demo3d-windows.zip
+echo Upload this zip (not just the .exe) as the Windows pre-release asset.
+
 pause
