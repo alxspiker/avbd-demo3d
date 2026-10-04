@@ -97,5 +97,3 @@ else()
         target_link_libraries(${PROJECT_NAME} PRIVATE ${X11_LIBRARIES})
     endif()
 endif()
-
-endif()
