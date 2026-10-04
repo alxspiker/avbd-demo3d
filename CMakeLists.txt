@@ -98,13 +98,4 @@ else()
     endif()
 endif()
 
-# Copy SDL2.dll to the output folder on Windows
-if(WIN32)
-    add_custom_command(
-        TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            # Use the underlying target name here as well
-            $<TARGET_FILE:SDL2-static>
-            $<TARGET_FILE_DIR:${PROJECT_NAME}>
-    )
 endif()
