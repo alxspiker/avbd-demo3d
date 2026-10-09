@@ -44,3 +44,7 @@ These deterministic finite-duration scenarios cannot certify arbitrary contact, 
 ## Build policy
 
 The personal GitHub repository intentionally contains no `.github/workflows` or compiled binaries. Builds/tests are local or can be run manually; organization-owned CI can be added later when requested.
+
+## Milestones 6/7 update
+
+New optional translation CCD and colored multithreaded solver tested in 19 assertions; see [CCD_AND_PARALLEL.md](CCD_AND_PARALLEL.md) for boundaries, measurements and reproduction. This supersedes the earlier statements on this page that no swept CCD or CPU parallelism existed. Full rotating rigid CCD and GPU scaling are still missing.

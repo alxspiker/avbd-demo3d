@@ -4,6 +4,10 @@
 #include <limits>
 #include <stdexcept>
 #include <set>
+#include <atomic>
+#ifdef AVBD_HAS_OPENMP
+#include <omp.h>
+#endif
 
 namespace avbd {
 static constexpr double EPS=1e-12;
@@ -225,6 +229,7 @@ void World::step(){
         }
         substeps=std::clamp(static_cast<int>(std::ceil(std::min(maxRatio,1e9))),1,settings.maxSubsteps);
     }
+    if(settings.enableCCD){stepCCD();return;}
     if(substeps==1){stepDiscrete();stats_.ccdSubsteps=1;return;}
     const double fullDT=settings.dt;
     Statistics aggregate{};
@@ -245,6 +250,166 @@ void World::step(){
     aggregate.sleepingBodies=stats_.sleepingBodies;aggregate.ccdSubsteps=substeps;
     stats_=aggregate;
 }
+// Analytic swept intersections for linear translation with fixed orientation.
+// Input velocities describe the step's chord; gravity and angular motion are
+// not treated as exact continuous trajectories, so this is not general 6-DOF CCD.
+static constexpr double NO_HIT=std::numeric_limits<double>::infinity();
+static double sweepSphereSphere(const Body& a,const Body& b,Vec3 va,Vec3 vb,double dt,double margin){
+    Vec3 d=a.p-b.p,v=va-vb;
+    double rr=a.half.x+b.half.x+margin, c=dot(d,d)-rr*rr;
+    if(c<=0)return NO_HIT; // Existing contact handled by discrete solver.
+    double aa=dot(v,v),bb=2*dot(d,v),disc=bb*bb-4*aa*c;
+    if(aa<1e-24||bb>=0||disc<0)return NO_HIT;
+    double t=(-bb-std::sqrt(disc))/(2*aa);
+    return t>=0&&t<=dt?t:NO_HIT;
+}
+static double boxPointDistance2(Vec3 p,Vec3 h){
+    return length2({std::max(0.,std::abs(p.x)-h.x),std::max(0.,std::abs(p.y)-h.y),std::max(0.,std::abs(p.z)-h.z)});
+}
+static double sweepSphereBox(const Body& sphere,const Body& box,Vec3 vs,Vec3 vb,double dt,double margin){
+    Vec3 p=box.q.conjugate().rotate(sphere.p-box.p);
+    Vec3 v=box.q.conjugate().rotate(vs-vb);
+    const double r=sphere.half.x+margin, rr=r*r;
+    if(boxPointDistance2(p,box.half)<=rr)return NO_HIT;
+    // The squared point-to-AABB distance is a quadratic on each interval
+    // between crossings of the six axis-aligned face planes. Enumerating all
+    // intervals yields the exact first intersection with the rounded box.
+    std::vector<double> cuts{0,dt};
+    for(int i=0;i<3;i++)if(std::abs(v[i])>1e-14)for(double sign:{-1.,1.}){
+        double t=(sign*box.half[i]-p[i])/v[i];
+        if(t>0&&t<dt)cuts.push_back(t);
+    }
+    std::sort(cuts.begin(),cuts.end());
+    cuts.erase(std::unique(cuts.begin(),cuts.end(),[](double a,double b){return std::abs(a-b)<1e-12;}),cuts.end());
+    for(size_t interval=1;interval<cuts.size();interval++){
+        double lo=cuts[interval-1],hi=cuts[interval];
+        Vec3 mid=p+v*((lo+hi)*0.5);
+        double A=0,B=0,C=-rr;
+        for(int i=0;i<3;i++){
+            double edge=mid[i]<-box.half[i]?-box.half[i]:(mid[i]>box.half[i]?box.half[i]:mid[i]);
+            if(mid[i]>=-box.half[i]&&mid[i]<=box.half[i])continue;
+            const double offset=p[i]-edge;
+            A+=v[i]*v[i];B+=2*v[i]*offset;C+=offset*offset;
+        }
+        if(A<1e-24){if(C<=0)return lo;continue;}
+        const double disc=B*B-4*A*C;
+        if(disc<0)continue;
+        const double root=(-B-std::sqrt(std::max(0.,disc)))/(2*A);
+        if(root>=lo-1e-10&&root<=hi+1e-10)return std::clamp(root,lo,hi);
+    }
+    return NO_HIT;
+}
+static double sweepBoxBox(const Body& a,const Body& b,Vec3 va,Vec3 vb,double dt,double margin){
+    const OBB A=obb(a),B=obb(b);
+    const Vec3 rel=vb-va,d=b.p-a.p;
+    double enter=0,exit=dt;
+    bool separated=false;
+    auto axis=[&](Vec3 raw){
+        const double l=length(raw);if(l<1e-8)return true;
+        const Vec3 n=raw/l;
+        const double extent=radius(A,n)+radius(B,n)+margin;
+        const double dist=dot(d,n),speed=dot(rel,n);
+        if(std::abs(dist)>extent)separated=true;
+        if(std::abs(speed)<1e-14)return std::abs(dist)<=extent;
+        double u=(-extent-dist)/speed,v=(extent-dist)/speed;
+        if(u>v)std::swap(u,v);
+        enter=std::max(enter,u);exit=std::min(exit,v);
+        return enter<=exit;
+    };
+    for(int i=0;i<3;i++)if(!axis(A.axis[i]))return NO_HIT;
+    for(int i=0;i<3;i++)if(!axis(B.axis[i]))return NO_HIT;
+    for(int i=0;i<3;i++)for(int j=0;j<3;j++)if(!axis(cross(A.axis[i],B.axis[j])))return NO_HIT;
+    return separated && enter>=0 && enter<=dt && enter<=exit ? enter:NO_HIT;
+}
+static Vec3 ccdVelocity(const Body& b,Vec3 gravity,double dt){
+    return b.dynamic()&&!b.sleeping?b.velocity+gravity*dt:Vec3{};
+}
+void World::stepCCD(){
+    if(settings.maxCCDSteps<1)throw std::invalid_argument("maxCCDSteps must be positive");
+    const double fullDt=settings.dt;
+    double remaining=fullDt;
+    Statistics aggregate{};
+    int count=0;
+    try{
+        while(remaining>fullDt*1e-10){
+            if(count>=settings.maxCCDSteps){
+                // A finite event budget cannot provide a no-tunnelling guarantee.
+                // Report the unresolved window rather than silently claim CCD succeeded.
+                ++aggregate.ccdUnresolved;
+                settings.dt=remaining;stepDiscrete();
+                ++count;break;
+            }
+            std::vector<Vec3> minPos(bodies_.size()),maxPos(bodies_.size()),vel(bodies_.size());
+            std::vector<Interval> sweep;
+            sweep.reserve(bodies_.size());
+            for(const Body& b:bodies_){
+                Vec3 ext;
+                if(b.shape==Shape::Sphere)ext=b.half;
+                else{
+                    OBB o=obb(b);
+                    for(int k=0;k<3;k++)ext+=Vec3{std::abs(o.axis[k].x),std::abs(o.axis[k].y),std::abs(o.axis[k].z)}*o.h[k];
+                }
+                const Vec3 v=ccdVelocity(b,settings.gravity,remaining);
+                vel[b.id]=v;
+                const Vec3 dest=b.p+v*remaining;
+                const Vec3 a{std::min(b.p.x,dest.x),std::min(b.p.y,dest.y),std::min(b.p.z,dest.z)};
+                const Vec3 z{std::max(b.p.x,dest.x),std::max(b.p.y,dest.y),std::max(b.p.z,dest.z)};
+                minPos[b.id]=a-ext;maxPos[b.id]=z+ext;
+                sweep.push_back({b.id,minPos[b.id].x-settings.contactMargin,maxPos[b.id].x+settings.contactMargin});
+            }
+            std::sort(sweep.begin(),sweep.end(),[](Interval a,Interval b){return a.minX<b.minX;});
+            std::set<std::pair<int,int>> linked;
+            for(const auto& j:joints_)if(j.enabled)linked.insert({std::min(j.a,j.b),std::max(j.a,j.b)});
+            double first=NO_HIT;
+            double firstSpeed=0;
+            for(size_t i=0;i<sweep.size();i++)for(size_t j=i+1;j<sweep.size()&&sweep[j].minX<=sweep[i].maxX;j++){
+                int ia=std::min(sweep[i].i,sweep[j].i),ib=std::max(sweep[i].i,sweep[j].i);
+                const Body& a=bodies_[ia];const Body& b=bodies_[ib];
+                if((!a.dynamic()&&!b.dynamic())||(a.sleeping&&b.sleeping))continue;
+                if(linked.count({ia,ib}))continue;
+                if(maxPos[ia].y+settings.contactMargin<minPos[ib].y||maxPos[ib].y+settings.contactMargin<minPos[ia].y||
+                   maxPos[ia].z+settings.contactMargin<minPos[ib].z||maxPos[ib].z+settings.contactMargin<minPos[ia].z)continue;
+                // A rotating OBB requires angular continuous SAT, not this linear sweep.
+                // Do not claim its TOI is exact. It is still advanced by the normal solver.
+                if((a.shape==Shape::Box&&length2(a.angularVelocity)>1e-12)||
+                   (b.shape==Shape::Box&&length2(b.angularVelocity)>1e-12)){++aggregate.ccdUnsupportedRotation;continue;}
+                ++aggregate.ccdCandidates;
+                double hit=NO_HIT;
+                if(a.shape==Shape::Sphere && b.shape==Shape::Sphere)hit=sweepSphereSphere(a,b,vel[ia],vel[ib],remaining,settings.contactMargin);
+                else if(a.shape==Shape::Sphere)hit=sweepSphereBox(a,b,vel[ia],vel[ib],remaining,settings.contactMargin);
+                else if(b.shape==Shape::Sphere)hit=sweepSphereBox(b,a,vel[ib],vel[ia],remaining,settings.contactMargin);
+                else hit=sweepBoxBox(a,b,vel[ia],vel[ib],remaining,settings.contactMargin);
+                if(hit<first){first=hit;firstSpeed=length(vel[ia]-vel[ib]);}
+            }
+            double advance=remaining;
+            if(std::isfinite(first) && first<remaining){
+                // Advance slightly past first contact, within the existing
+                // narrowphase margin, so normal and restitution constraints activate.
+                const double extra=std::max(1e-12,std::min(1e-5,settings.contactMargin*0.15/(firstSpeed+1e-9)));
+                advance=std::min(remaining,std::max(first+extra,fullDt*1e-7));
+                ++aggregate.ccdEvents;
+            }
+            settings.dt=advance;
+            stepDiscrete();
+            aggregate.impactEvents+=stats_.impactEvents;
+            aggregate.brokenJoints+=stats_.brokenJoints;
+            aggregate.pairs+=stats_.pairs;
+            aggregate.maxPenetration=std::max(aggregate.maxPenetration,stats_.maxPenetration);
+            aggregate.maxSpeed=std::max(aggregate.maxSpeed,stats_.maxSpeed);
+            aggregate.maxAngularSpeed=std::max(aggregate.maxAngularSpeed,stats_.maxAngularSpeed);
+            remaining-=advance;
+            ++count;
+        }
+    }catch(...){settings.dt=fullDt;throw;}
+    settings.dt=fullDt;
+    aggregate.manifolds=stats_.manifolds;
+    aggregate.contacts=stats_.contacts;
+    aggregate.sleepingBodies=stats_.sleepingBodies;
+    aggregate.ccdSubsteps=count;
+    aggregate.solverColors=stats_.solverColors;
+    stats_=aggregate;
+}
+
 void World::stepDiscrete(){
     const double dt=settings.dt;if(settings.postIterations<1||settings.iterations<1)throw std::runtime_error("positive solver iteration counts required");if(dt<=0)throw std::runtime_error("positive fixed step required");
     stats_={};
@@ -340,17 +505,38 @@ void World::stepDiscrete(){
     for(auto& [key,m]:manifolds_){acting[m.a].push_back(&m);acting[m.b].push_back(&m);
         touched[m.a]=touched[m.b]=true;
         stats_.contacts+=static_cast<int>(m.contacts.size());}
-    for(int it=0;it<settings.iterations+settings.postIterations;it++){
-        bool post=it>=settings.iterations;
-        if(it==settings.iterations){
-            // As in the 2D reference: BDF1 velocity is reconstructed before post-stabilization.
-            // Geometric penetration repair does not become spurious kinetic energy.
-            for(Body& b:bodies_)if(b.dynamic()&&!b.sleeping){
-                b.velocity=(b.p-startP[b.id])/dt;
-                b.angularVelocity=(b.q*startQ[b.id].conjugate()).log()/dt;
+    // Greedy contact-graph coloring. Every mutable body in the same color is
+    // independent: its contacts/joints only reference other colors or statics.
+    // Each color is a Gauss-Seidel wavefront; bodies within a color are parallel.
+    std::vector<std::vector<int>> colors;
+    if(settings.enableParallelSolver){
+        std::vector<std::vector<int>> neighbors(bodies_.size());
+        auto connect=[&](int ia,int ib){
+            if(bodies_[ia].dynamic()&&!bodies_[ia].sleeping && bodies_[ib].dynamic()&&!bodies_[ib].sleeping){
+                neighbors[ia].push_back(ib);neighbors[ib].push_back(ia);
             }
+        };
+        for(const auto& [key,m]:manifolds_)connect(m.a,m.b);
+        for(const auto& j:joints_)if(j.enabled)connect(j.a,j.b);
+        std::vector<int> assigned(bodies_.size(),-1);
+        for(const auto& b:bodies_)if(b.dynamic()&&!b.sleeping){
+            int c=0;
+            for(;;c++){
+                bool conflict=false;
+                for(int other:neighbors[b.id])if(assigned[other]==c){conflict=true;break;}
+                if(!conflict)break;
+            }
+            if(c==static_cast<int>(colors.size()))colors.emplace_back();
+            colors[c].push_back(b.id);assigned[b.id]=c;
         }
-        for(Body& body:bodies_){if(!body.dynamic()||body.sleeping)continue;
+    }
+    stats_.solverColors=static_cast<int>(colors.size());
+    const int parallelThreads=settings.parallelThreads;
+    if(parallelThreads<0)throw std::invalid_argument("parallelThreads must be >= 0");
+    std::atomic<bool> solverFailure{false};
+    // Only the owner body is modified. Contact and joint state is read-only
+    // while the primal solve executes; dual updates occur after each wavefront.
+    auto solveBody=[&](Body& body,bool post){
             double H[6][6]{},g[6]{};
             Mat3 I=worldInertia(body);
             double m=body.mass/(dt*dt);
@@ -393,10 +579,34 @@ void World::stepDiscrete(){
                 const double force=std::clamp(joint->lambda+penalty*C,-joint->breakForce,joint->breakForce);
                 addRow(H,g,J,penalty,force);
             }
-            double dx[6]{};if(!solveSPD(H,g,dx))throw std::runtime_error("AVBD 6x6 matrix lost positive definiteness");
+            double dx[6]{};if(!solveSPD(H,g,dx)){solverFailure.store(true,std::memory_order_relaxed);return;}
             body.p-=Vec3(dx[0],dx[1],dx[2]);
             body.q=(Quat::exp(-Vec3(dx[3],dx[4],dx[5]))*body.q).unit();
+
+    };
+    for(int it=0;it<settings.iterations+settings.postIterations;it++){
+        bool post=it>=settings.iterations;
+        if(it==settings.iterations){
+            // As in the 2D reference: BDF1 velocity is reconstructed before post-stabilization.
+            // Geometric penetration repair does not become spurious kinetic energy.
+            for(Body& b:bodies_)if(b.dynamic()&&!b.sleeping){
+                b.velocity=(b.p-startP[b.id])/dt;
+                b.angularVelocity=(b.q*startQ[b.id].conjugate()).log()/dt;
+            }
         }
+        if(settings.enableParallelSolver){
+            for(const auto& wave:colors){
+#ifdef AVBD_HAS_OPENMP
+#pragma omp parallel for schedule(static) if(wave.size()>=24 && parallelThreads!=1) num_threads(parallelThreads>0?parallelThreads:omp_get_max_threads())
+#endif
+                for(int k=0;k<static_cast<int>(wave.size());k++)
+                    solveBody(bodies_[wave[k]],post);
+            }
+        }else{
+            for(Body& b:bodies_)if(b.dynamic()&&!b.sleeping)solveBody(b,post);
+        }
+        if(solverFailure.load(std::memory_order_relaxed))throw std::runtime_error("AVBD 6x6 matrix lost positive definiteness");
+
         if(!post)for(auto& joint:joints_)if(joint.enabled){
             Vec3 n;const double C=jointConstraint(bodies_[joint.a],bodies_[joint.b],joint,n);
             const double desired=joint.lambda+joint.penalty*C;

@@ -74,6 +74,7 @@ struct Statistics {
     int pairs=0, manifolds=0, contacts=0;
     double maxPenetration=0, maxSpeed=0, maxAngularSpeed=0;
     int impactEvents=0, ccdSubsteps=1, brokenJoints=0, sleepingBodies=0;
+    int ccdEvents=0, ccdCandidates=0, ccdUnresolved=0, ccdUnsupportedRotation=0, solverColors=0;
 };
 struct Settings {
     double dt=1.0/120.0;
@@ -87,6 +88,10 @@ struct Settings {
     double initialPenalty=1000;
     double maxPenalty=1000000;
     double restitutionThreshold=0.5; // Ignore very slow contact restitution
+    bool enableCCD=false; // Event-driven translation CCD for spheres and oriented boxes; rotating/accelerating TOI is approximate
+    int maxCCDSteps=48;
+    bool enableParallelSolver=false; // Independent graph-colored body updates (OpenMP if available)
+    int parallelThreads=0; // 0 = OpenMP default
     bool enableAdaptiveSubsteps=false; // Conservative discrete substepping; NOT exact swept CCD
     int maxSubsteps=64;
     double maxMotionFraction=0.3; // Movement <= fraction of minimum moving shape extent
@@ -114,6 +119,7 @@ public:
     void step();
 private:
     void stepDiscrete();
+    void stepCCD();
     std::vector<Body> bodies_;
     std::vector<DistanceJoint> joints_;
     std::map<std::pair<int,int>,Manifold> manifolds_;
