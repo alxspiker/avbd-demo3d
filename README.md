@@ -108,3 +108,38 @@ python tools/render_rotational.py rotational_trace.json stage8-reviewed.mp4
 The 12-second video is a **6× slowed diagnostic replay**: every actual 120 Hz physics pose is held for six rendered 24-fps frames. There are no scripted contact impulses or fabricated motion; the initial scene is reset between the eight controlled experiments. The measured sphere speed, impulse count, and TOI events appear in each panel. The final display frame's contact count is **not** used as a proxy for impacts occurring earlier in the tick.
 
 The renderer produces an MP4 that is played separately; there is no hosted interactive graphics application. See `docs/CCD_AND_PARALLEL.md` for assumptions and limitations.
+
+### Stage 9 — 3D BVH broadphase, parallel narrowphase and collision-island scheduling
+
+Stage 9 adds three independent **opt-in** switches so old and new paths can be compared directly:
+
+- `enableSpatialBroadphase`: deterministic, median-split 3D AABB tree for both discrete and swept CCD candidate gathering. This improves sparse layouts where a one-axis sweep has many false overlaps. A very large static ground plane is stored in one leaf, not duplicated across spatial cells.
+- `enableParallelNarrowphase`: compute pair contacts in independent slots with OpenMP, then merge/manifold-match in stable sorted pair order on one thread. The path remains usable without OpenMP (serial fallback).
+- `enableIslandSolver`: when `enableParallelSolver` is also on, schedule disconnected groups of active dynamic bodies independently. Enabled distance joints connect islands; static floors do **not** join otherwise unrelated groups. If only one island exists, the Stage 7 graph-colour solver is retained.
+
+All switches default to **false** for backwards compatibility. Example:
+
+```cpp
+world.settings.enableSpatialBroadphase = true;
+world.settings.enableParallelNarrowphase = true;
+world.settings.enableParallelSolver = true;
+world.settings.enableIslandSolver = true;
+world.settings.parallelThreads = 4;
+```
+
+Rebuild and reproduce the Stage 9 regression, 1k/5k/10k benchmarks and **actual recorded** four-tower simulation:
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DAVBD_ENABLE_OPENMP=ON
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
+./build/avbd3d_scaling_benchmark 1000 sparse 5
+./build/avbd3d_scaling_benchmark 5000 islands 5
+./build/avbd3d_scaling_benchmark 10000 islands 5
+./build/avbd3d_scaling_capture > stage9.json
+python tools/render_scaling.py stage9.json stage9.mp4
+```
+
+`stage9.mp4` uses 240 recorded frames at 24 fps (10 seconds), with two actual 120 Hz physics steps per display frame (5× slow playback). It has 324 moving bodies, **not** 10,000. The visible shapes are actual C++ rigid-body poses; contact counts and island counts come from the simulation.
+
+See [docs/STAGE9_SCALING.md](docs/STAGE9_SCALING.md) for benchmark details, limitations and reproducibility. The MP4 and JSON output are not stored in GitHub; run the capture locally to recreate them. No GitHub Actions are required.

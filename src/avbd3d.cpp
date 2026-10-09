@@ -4,6 +4,8 @@
 #include <limits>
 #include <stdexcept>
 #include <set>
+#include <numeric>
+#include <functional>
 #include <atomic>
 #ifdef AVBD_HAS_OPENMP
 #include <omp.h>
@@ -210,6 +212,96 @@ static double jointConstraint(const Body& a,const Body& b,const DistanceJoint& j
     return dist-j.restLength;
 }
 struct Interval{int i;double minX,maxX;};
+struct Bounds {Vec3 lo,hi;};
+static bool boundsOverlap(const Bounds& a,const Bounds& b){
+    return a.lo.x<=b.hi.x && b.lo.x<=a.hi.x &&
+           a.lo.y<=b.hi.y && b.lo.y<=a.hi.y &&
+           a.lo.z<=b.hi.z && b.lo.z<=a.hi.z;
+}
+static Bounds merged(Bounds a,Bounds b){
+    return {{std::min(a.lo.x,b.lo.x),std::min(a.lo.y,b.lo.y),std::min(a.lo.z,b.lo.z)},
+            {std::max(a.hi.x,b.hi.x),std::max(a.hi.y,b.hi.y),std::max(a.hi.z,b.hi.z)}};
+}
+// Rebuilt BVH: median-split spatial hierarchy. Unlike uniform grids it doesn't
+// replicate large ground planes across thousands of cells. Leaves map to one body.
+// Output is always sorted lexicographically, regardless of split/traversal order.
+static std::vector<std::pair<int,int>> broadphase(const std::vector<Bounds>& boxes,bool useBVH){
+    const int n=static_cast<int>(boxes.size());
+    std::vector<std::pair<int,int>> pairs;
+    if(!useBVH){
+        std::vector<Interval> intervals;intervals.reserve(boxes.size());
+        for(int i=0;i<n;i++)intervals.push_back({i,boxes[i].lo.x,boxes[i].hi.x});
+        std::sort(intervals.begin(),intervals.end(),[](const Interval& a,const Interval& b){
+            return a.minX==b.minX?a.i<b.i:a.minX<b.minX;
+        });
+        for(int i=0;i<n;i++)for(int j=i+1;j<n&&intervals[j].minX<=intervals[i].maxX;j++){
+            int a=intervals[i].i,b=intervals[j].i;
+            if(boundsOverlap(boxes[a],boxes[b]))pairs.emplace_back(std::min(a,b),std::max(a,b));
+        }
+    }else if(n>1){
+        struct Node{Bounds box;int left=-1,right=-1,id=-1;};
+        std::vector<Node> nodes;nodes.reserve(2*n);
+        std::vector<int> order(n);std::iota(order.begin(),order.end(),0);
+        std::function<int(int,int)> build=[&](int begin,int end)->int{
+            const int index=static_cast<int>(nodes.size());nodes.push_back({});
+            Bounds enclosing=boxes[order[begin]];
+            for(int k=begin+1;k<end;k++)enclosing=merged(enclosing,boxes[order[k]]);
+            nodes[index].box=enclosing;
+            if(end-begin==1){nodes[index].id=order[begin];return index;}
+            const Vec3 dimensions=enclosing.hi-enclosing.lo;
+            const int axis=(dimensions.y>dimensions.x && dimensions.y>=dimensions.z)?1:
+                            (dimensions.z>dimensions.x && dimensions.z>dimensions.y)?2:0;
+            std::sort(order.begin()+begin,order.begin()+end,[&](int a,int b){
+                const double ca=boxes[a].lo[axis]+boxes[a].hi[axis];
+                const double cb=boxes[b].lo[axis]+boxes[b].hi[axis];
+                return ca==cb?a<b:ca<cb;
+            });
+            int split=(begin+end)/2;
+            const int l=build(begin,split),r=build(split,end);
+            nodes[index].left=l;nodes[index].right=r;
+            return index;
+        };
+        const int root=build(0,n);
+        std::function<void(int,int)> visit=[&](int x,int y){
+            const Node& a=nodes[x];const Node& b=nodes[y];
+            if(!boundsOverlap(a.box,b.box))return;
+            if(x==y){
+                if(a.id>=0)return;
+                visit(a.left,a.left);visit(a.left,a.right);visit(a.right,a.right);
+            }else if(a.id>=0&&b.id>=0){
+                pairs.emplace_back(std::min(a.id,b.id),std::max(a.id,b.id));
+            }else if(a.id>=0 || (b.id<0 &&
+                      length2(a.box.hi-a.box.lo)<length2(b.box.hi-b.box.lo))){
+                visit(x,b.left);visit(x,b.right);
+            }else{
+                visit(a.left,y);visit(a.right,y);
+            }
+        };
+        visit(root,root);
+    }
+    std::sort(pairs.begin(),pairs.end());
+    return pairs;
+}
+// Joint/contact connectivity through dynamic bodies only. A shared static
+// floor must NOT merge two disconnected stacks into a single island.
+static std::vector<std::vector<int>> buildIslands(const std::vector<Body>& bodies,
+        const std::map<std::pair<int,int>,Manifold>& manifolds,
+        const std::vector<DistanceJoint>& joints){
+    const int n=static_cast<int>(bodies.size());
+    std::vector<int> parent(n);std::iota(parent.begin(),parent.end(),0);
+    auto root=[&](int i){while(parent[i]!=i){parent[i]=parent[parent[i]];i=parent[i];}return i;};
+    auto connect=[&](int a,int b){
+        if(!bodies[a].dynamic()||bodies[a].sleeping||!bodies[b].dynamic()||bodies[b].sleeping)return;
+        a=root(a);b=root(b);if(a!=b)parent[std::max(a,b)]=std::min(a,b);
+    };
+    for(const auto& [key,m]:manifolds)connect(m.a,m.b);
+    for(const auto& j:joints)if(j.enabled)connect(j.a,j.b);
+    std::map<int,std::vector<int>> groups;
+    for(const Body& b:bodies)if(b.dynamic()&&!b.sleeping)groups[root(b.id)].push_back(b.id);
+    std::vector<std::vector<int>> result;result.reserve(groups.size());
+    for(auto& [key,group]:groups)result.push_back(std::move(group));
+    return result;
+}
 void World::wakeBody(int id){Body& b=body(id);b.sleeping=false;b.quietTime=0;}
 void World::step(){
     if(!settings.enableSleeping)for(auto& b:bodies_){b.sleeping=false;b.quietTime=0;}
@@ -240,6 +332,7 @@ void World::step(){
             aggregate.impactEvents+=stats_.impactEvents;
             aggregate.brokenJoints+=stats_.brokenJoints;
             aggregate.pairs+=stats_.pairs;
+            aggregate.broadphaseCandidates+=stats_.broadphaseCandidates;
             aggregate.maxPenetration=std::max(aggregate.maxPenetration,stats_.maxPenetration);
             aggregate.maxSpeed=std::max(aggregate.maxSpeed,stats_.maxSpeed);
             aggregate.maxAngularSpeed=std::max(aggregate.maxAngularSpeed,stats_.maxAngularSpeed);
@@ -248,6 +341,7 @@ void World::step(){
     settings.dt=fullDT;
     aggregate.manifolds=stats_.manifolds;aggregate.contacts=stats_.contacts;
     aggregate.sleepingBodies=stats_.sleepingBodies;aggregate.ccdSubsteps=substeps;
+    aggregate.solverColors=stats_.solverColors;aggregate.collisionIslands=stats_.collisionIslands;aggregate.largestIsland=stats_.largestIsland;
     stats_=aggregate;
 }
 // Analytic swept intersections for linear translation with fixed orientation.
@@ -390,40 +484,35 @@ void World::stepCCD(){
                 ++count;break;
             }
             std::vector<Vec3> minPos(bodies_.size()),maxPos(bodies_.size()),vel(bodies_.size());
-            std::vector<Interval> sweep;
-            sweep.reserve(bodies_.size());
+            std::vector<Bounds> sweptBounds(bodies_.size());
             for(const Body& b:bodies_){
                 Vec3 ext;
                 if(b.shape==Shape::Sphere)ext=b.half;
-                else{
-                    if(length2(b.angularVelocity)>1e-12){
-                        const double radius=length(b.half);
-                        ext={radius,radius,radius}; // Swept rotational bounding sphere
-                    }else{
-                        OBB o=obb(b);
-                        for(int k=0;k<3;k++)ext+=Vec3{std::abs(o.axis[k].x),std::abs(o.axis[k].y),std::abs(o.axis[k].z)}*o.h[k];
-                    }
+                else if(length2(b.angularVelocity)>1e-12){
+                    const double r=length(b.half);ext={r,r,r};
+                }else{
+                    OBB o=obb(b);
+                    for(int k=0;k<3;k++)ext+=Vec3{std::abs(o.axis[k].x),std::abs(o.axis[k].y),std::abs(o.axis[k].z)}*o.h[k];
                 }
-                const Vec3 v=ccdVelocity(b,settings.gravity,remaining);
+                Vec3 v=ccdVelocity(b,settings.gravity,remaining);
                 vel[b.id]=v;
-                const Vec3 dest=b.p+v*remaining;
-                const Vec3 a{std::min(b.p.x,dest.x),std::min(b.p.y,dest.y),std::min(b.p.z,dest.z)};
-                const Vec3 z{std::max(b.p.x,dest.x),std::max(b.p.y,dest.y),std::max(b.p.z,dest.z)};
-                minPos[b.id]=a-ext;maxPos[b.id]=z+ext;
-                sweep.push_back({b.id,minPos[b.id].x-settings.contactMargin,maxPos[b.id].x+settings.contactMargin});
+                Vec3 dest=b.p+v*remaining;
+                Vec3 lo{std::min(b.p.x,dest.x),std::min(b.p.y,dest.y),std::min(b.p.z,dest.z)};
+                Vec3 hi{std::max(b.p.x,dest.x),std::max(b.p.y,dest.y),std::max(b.p.z,dest.z)};
+                minPos[b.id]=lo-ext;maxPos[b.id]=hi+ext;
+                const Vec3 pad{settings.contactMargin,settings.contactMargin,settings.contactMargin};
+                sweptBounds[b.id]={minPos[b.id]-pad,maxPos[b.id]+pad};
             }
-            std::sort(sweep.begin(),sweep.end(),[](Interval a,Interval b){return a.minX<b.minX;});
+            const auto candidatePairs=broadphase(sweptBounds,settings.enableSpatialBroadphase);
+            aggregate.broadphaseCandidates+=static_cast<int>(candidatePairs.size());
             std::set<std::pair<int,int>> linked;
             for(const auto& j:joints_)if(j.enabled)linked.insert({std::min(j.a,j.b),std::max(j.a,j.b)});
             double first=NO_HIT;
             double firstSpeed=0;
-            for(size_t i=0;i<sweep.size();i++)for(size_t j=i+1;j<sweep.size()&&sweep[j].minX<=sweep[i].maxX;j++){
-                int ia=std::min(sweep[i].i,sweep[j].i),ib=std::max(sweep[i].i,sweep[j].i);
+            for(const auto& [ia,ib]:candidatePairs){
                 const Body& a=bodies_[ia];const Body& b=bodies_[ib];
                 if((!a.dynamic()&&!b.dynamic())||(a.sleeping&&b.sleeping))continue;
                 if(linked.count({ia,ib}))continue;
-                if(maxPos[ia].y+settings.contactMargin<minPos[ib].y||maxPos[ib].y+settings.contactMargin<minPos[ia].y||
-                   maxPos[ia].z+settings.contactMargin<minPos[ib].z||maxPos[ib].z+settings.contactMargin<minPos[ia].z)continue;
                 const bool rotating=(a.shape==Shape::Box&&length2(a.angularVelocity)>1e-12)||
                                     (b.shape==Shape::Box&&length2(b.angularVelocity)>1e-12);
                 ++aggregate.ccdCandidates;
@@ -458,6 +547,7 @@ void World::stepCCD(){
             aggregate.impactEvents+=stats_.impactEvents;
             aggregate.brokenJoints+=stats_.brokenJoints;
             aggregate.pairs+=stats_.pairs;
+            aggregate.broadphaseCandidates+=stats_.broadphaseCandidates;
             aggregate.maxPenetration=std::max(aggregate.maxPenetration,stats_.maxPenetration);
             aggregate.maxSpeed=std::max(aggregate.maxSpeed,stats_.maxSpeed);
             aggregate.maxAngularSpeed=std::max(aggregate.maxAngularSpeed,stats_.maxAngularSpeed);
@@ -471,6 +561,8 @@ void World::stepCCD(){
     aggregate.sleepingBodies=stats_.sleepingBodies;
     aggregate.ccdSubsteps=count;
     aggregate.solverColors=stats_.solverColors;
+    aggregate.collisionIslands=stats_.collisionIslands;
+    aggregate.largestIsland=stats_.largestIsland;
     stats_=aggregate;
 }
 
@@ -487,29 +579,45 @@ void World::stepDiscrete(){
     std::vector<Vec3> inertialP;std::vector<Quat> inertialQ;
     inertialP.reserve(bodies_.size());inertialQ.reserve(bodies_.size());
     for(const auto& b:bodies_){inertialP.push_back(b.p);inertialQ.push_back(b.q);}
-    // Sweep and prune broadphase on conservative rotated AABBs.
-    std::vector<Interval> interval;interval.reserve(bodies_.size());
-    std::vector<Vec3> aabb(bodies_.size());
-    for(const Body& b:bodies_){OBB ob=obb(b);Vec3 r;
-        for(int i=0;i<3;i++){r+=Vec3{std::abs(ob.axis[i].x),std::abs(ob.axis[i].y),std::abs(ob.axis[i].z)}*ob.h[i];}
+    // Stable 3D BVH or the Stage 8 one-axis sweep, selected by settings.
+    std::vector<Bounds> bounds(bodies_.size());
+    for(const Body& b:bodies_){
+        OBB ob=obb(b);Vec3 r;
+        for(int i=0;i<3;i++)r+=Vec3{std::abs(ob.axis[i].x),std::abs(ob.axis[i].y),std::abs(ob.axis[i].z)}*ob.h[i];
         if(b.shape==Shape::Sphere)r=b.half;
-        aabb[b.id]=r;interval.push_back({b.id,b.p.x-r.x-settings.contactMargin,b.p.x+r.x+settings.contactMargin});
+        Vec3 pad{settings.contactMargin,settings.contactMargin,settings.contactMargin};
+        bounds[b.id]={b.p-r-pad,b.p+r+pad};
     }
-    std::sort(interval.begin(),interval.end(),[](const auto& a,const auto& b){return a.minX<b.minX;});
+    const auto candidatePairs=broadphase(bounds,settings.enableSpatialBroadphase);
+    stats_.broadphaseCandidates=static_cast<int>(candidatePairs.size());
     std::map<std::pair<int,int>,Manifold> next;
-    // Adjacent parts of a jointed assembly share anchors; their collision
-    // shapes may overlap legitimately (e.g. chain links or ball/socket).
+    // Adjacent joint links legitimately share collision volumes.
     std::set<std::pair<int,int>> linkedPairs;
     for(const auto& joint:joints_)if(joint.enabled)
         linkedPairs.insert({std::min(joint.a,joint.b),std::max(joint.a,joint.b)});
-    for(size_t i=0;i<interval.size();i++)for(size_t j=i+1;j<interval.size()&&interval[j].minX<=interval[i].maxX;j++){
-        int a=std::min(interval[i].i,interval[j].i),b=std::max(interval[i].i,interval[j].i);
+    std::vector<std::pair<int,int>> work;
+    work.reserve(candidatePairs.size());
+    for(const auto& [a,b]:candidatePairs){
         if(!bodies_[a].dynamic()&&!bodies_[b].dynamic())continue;
         if(linkedPairs.count({a,b}))continue;
-        Vec3 d=bodies_[a].p-bodies_[b].p,r=aabb[a]+aabb[b];
-        if(std::abs(d.y)>r.y+settings.contactMargin||std::abs(d.z)>r.z+settings.contactMargin)continue;
-        stats_.pairs++;
-        auto contacts=collide(bodies_[a],bodies_[b],settings.contactMargin);
+        work.emplace_back(a,b);
+    }
+    stats_.pairs=static_cast<int>(work.size());
+    // Each narrowphase call reads only body poses and writes a private slot.
+    // Manifolds, warmstarting and contact IDs are merged in stable pair order.
+    std::vector<std::vector<Contact>> generated(work.size());
+    if(settings.parallelThreads<0)throw std::invalid_argument("parallelThreads must be >= 0");
+    const int threads=settings.parallelThreads;
+#ifdef AVBD_HAS_OPENMP
+#pragma omp parallel for schedule(static) if(settings.enableParallelNarrowphase && work.size()>=64 && threads!=1) num_threads(threads>0?threads:omp_get_max_threads())
+#endif
+    for(int i=0;i<static_cast<int>(work.size());i++){
+        auto [a,b]=work[i];
+        generated[i]=collide(bodies_[a],bodies_[b],settings.contactMargin);
+    }
+    for(size_t i=0;i<work.size();i++){
+        auto [a,b]=work[i];
+        auto& contacts=generated[i];
         if(contacts.empty())continue;
         auto old=manifolds_.find({a,b});
         if(old!=manifolds_.end()){
@@ -569,11 +677,17 @@ void World::stepDiscrete(){
     for(auto& [key,m]:manifolds_){acting[m.a].push_back(&m);acting[m.b].push_back(&m);
         touched[m.a]=touched[m.b]=true;
         stats_.contacts+=static_cast<int>(m.contacts.size());}
+    auto islands=buildIslands(bodies_,manifolds_,joints_);
+    stats_.collisionIslands=static_cast<int>(islands.size());
+    for(const auto& island:islands)stats_.largestIsland=std::max(stats_.largestIsland,static_cast<int>(island.size()));
+    // Parallel islands preserve the local serial update order, and can run
+    // independently because static bodies are never mutable in the solver.
+    const bool useIslandTasks=settings.enableParallelSolver && settings.enableIslandSolver && islands.size()>1;
     // Greedy contact-graph coloring. Every mutable body in the same color is
     // independent: its contacts/joints only reference other colors or statics.
     // Each color is a Gauss-Seidel wavefront; bodies within a color are parallel.
     std::vector<std::vector<int>> colors;
-    if(settings.enableParallelSolver){
+    if(settings.enableParallelSolver && !useIslandTasks){
         std::vector<std::vector<int>> neighbors(bodies_.size());
         auto connect=[&](int ia,int ib){
             if(bodies_[ia].dynamic()&&!bodies_[ia].sleeping && bodies_[ib].dynamic()&&!bodies_[ib].sleeping){
@@ -658,7 +772,13 @@ void World::stepDiscrete(){
                 b.angularVelocity=(b.q*startQ[b.id].conjugate()).log()/dt;
             }
         }
-        if(settings.enableParallelSolver){
+        if(useIslandTasks){
+#ifdef AVBD_HAS_OPENMP
+#pragma omp parallel for schedule(dynamic,16) if(islands.size()>1 && parallelThreads!=1) num_threads(parallelThreads>0?parallelThreads:omp_get_max_threads())
+#endif
+            for(int k=0;k<static_cast<int>(islands.size());k++)
+                for(int id:islands[k])solveBody(bodies_[id],post);
+        }else if(settings.enableParallelSolver){
             for(const auto& wave:colors){
 #ifdef AVBD_HAS_OPENMP
 #pragma omp parallel for schedule(static) if(wave.size()>=24 && parallelThreads!=1) num_threads(parallelThreads>0?parallelThreads:omp_get_max_threads())

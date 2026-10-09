@@ -75,6 +75,7 @@ struct Statistics {
     double maxPenetration=0, maxSpeed=0, maxAngularSpeed=0;
     int impactEvents=0, ccdSubsteps=1, brokenJoints=0, sleepingBodies=0;
     int ccdEvents=0, ccdCandidates=0, ccdUnresolved=0, ccdUnsupportedRotation=0, solverColors=0;
+    int broadphaseCandidates=0, collisionIslands=0, largestIsland=0;
 };
 struct Settings {
     double dt=1.0/120.0;
@@ -91,6 +92,9 @@ struct Settings {
     bool enableCCD=false; // Event-driven translation CCD for spheres and oriented boxes; rotating/accelerating TOI is approximate
     int maxCCDSteps=48;
     bool enableParallelSolver=false; // Independent graph-colored body updates (OpenMP if available)
+    bool enableSpatialBroadphase=false; // Deterministic 3D BVH, optional alternative to 1D sweep-and-prune
+    bool enableParallelNarrowphase=false; // Parallel independent contact generation; stable serial manifold merge
+    bool enableIslandSolver=false; // Parallel disconnected constraint islands, with graph-color fallback
     int parallelThreads=0; // 0 = OpenMP default
     bool enableAdaptiveSubsteps=false; // Conservative discrete substepping; NOT exact swept CCD
     int maxSubsteps=64;
