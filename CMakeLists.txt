@@ -94,3 +94,12 @@ add_test(NAME persistent_contacts COMMAND avbd3d_persistent_contacts)
 # Stage 12: reproducible dense-contact benchmark of the single supported path.
 add_executable(avbd3d_contact_benchmark src/benchmark_contacts.cpp)
 target_link_libraries(avbd3d_contact_benchmark PRIVATE avbd3d)
+
+# Stage 13: instrument real dense-contact heap allocation churn.
+add_executable(avbd3d_contact_allocations tests/contact_allocations.cpp)
+target_link_libraries(avbd3d_contact_allocations PRIVATE avbd3d)
+add_test(NAME contact_allocations COMMAND avbd3d_contact_allocations)
+
+add_executable(avbd3d_contact_geometry tests/contact_geometry.cpp)
+target_link_libraries(avbd3d_contact_geometry PRIVATE avbd3d)
+add_test(NAME contact_geometry COMMAND avbd3d_contact_geometry)

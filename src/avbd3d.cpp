@@ -45,23 +45,34 @@ static bool satAxis(const OBB& a,const OBB& b,Vec3 delta,Vec3 v,int type,int i,i
     if(sep>best.sep) best={sep,n,type,i,j};
     return true;
 }
-static std::vector<Vec3> clip(const std::vector<Vec3>& input,Vec3 n,double offset){
-    std::vector<Vec3> out;if(input.empty())return out;
-    for(size_t i=0;i<input.size();i++){
-        Vec3 a=input[i],b=input[(i+1)%input.size()];double da=dot(n,a)-offset,db=dot(n,b)-offset;
+// Convex clipping of a quadrilateral by four side planes yields <=8 vertices.
+// Fixed local storage avoids heap activity inside every box-box narrowphase.
+struct ClipPoly {
+    std::array<Vec3,12> p{};
+    int count=0;
+    void push(Vec3 point){
+        if(count>=static_cast<int>(p.size()))throw std::length_error("clip polygon overflow");
+        p[count++]=point;
+    }
+};
+static ClipPoly clip(const ClipPoly& input,Vec3 n,double offset){
+    ClipPoly out;
+    for(int i=0;i<input.count;i++){
+        Vec3 a=input.p[i],b=input.p[(i+1)%input.count];
+        double da=dot(n,a)-offset,db=dot(n,b)-offset;
         bool ia=da<=1e-9,ib=db<=1e-9;
-        if(ia)out.push_back(a);
-        if(ia!=ib && std::abs(da-db)>EPS)out.push_back(a+(b-a)*(da/(da-db)));
+        if(ia)out.push(a);
+        if(ia!=ib && std::abs(da-db)>EPS)out.push(a+(b-a)*(da/(da-db)));
     }
     return out;
 }
-static void appendContact(const Body& a,const Body& b,Vec3 pa,Vec3 pb,Vec3 normalBA,std::vector<Contact>& out){
+static void appendContact(const Body& a,const Body& b,Vec3 pa,Vec3 pb,Vec3 normalBA,ContactBatch& out){
     if(out.size()>=4)return;
     for(const auto& c:out){Vec3 mid=(anchor(a,c.rA)+anchor(b,c.rB))*.5;if(length2(mid-(pa+pb)*.5)<1e-8)return;}
     Contact c;c.rA=local(a,pa);c.rB=local(b,pb);c.n=normalBA;
     out.push_back(c);
 }
-static void faceContacts(const Body& A,const Body& B,const OBB& a,const OBB& b,const Axis& best,bool refIsA,std::vector<Contact>& result,double margin){
+static void faceContacts(const Body& A,const Body& B,const OBB& a,const OBB& b,const Axis& best,bool refIsA,ContactBatch& result,double margin){
     const OBB& ref=refIsA?a:b;const OBB& inc=refIsA?b:a;
     const int axis=refIsA?best.i:best.j;
     Vec3 n=refIsA?best.n:-best.n; // reference face outward, toward incident body
@@ -74,17 +85,23 @@ static void faceContacts(const Body& A,const Body& B,const OBB& a,const OBB& b,c
     Vec3 incCenter=inc.c+inc.axis[incAxis]*(inc.h[incAxis]*incSign);
     int iu=(incAxis+1)%3,iv=(incAxis+2)%3;
     Vec3 eu=inc.axis[iu]*inc.h[iu],ev=inc.axis[iv]*inc.h[iv];
-    std::vector<Vec3> poly={incCenter+eu+ev,incCenter-eu+ev,incCenter-eu-ev,incCenter+eu-ev};
+    ClipPoly poly;
+    poly.push(incCenter+eu+ev);poly.push(incCenter-eu+ev);
+    poly.push(incCenter-eu-ev);poly.push(incCenter+eu-ev);
     for(int sideAxis:{u,v}){
         Vec3 dir=ref.axis[sideAxis];
         poly=clip(poly, dir, dot(dir,center)+ref.h[sideAxis]);
         poly=clip(poly,-dir, dot(-dir,center)+ref.h[sideAxis]);
     }
-    std::vector<std::pair<double,Vec3>> points;
-    for(Vec3 p:poly){double d=dot(p-center,n);if(d<=margin+1e-8)points.push_back({d,p});}
-    std::sort(points.begin(),points.end(),[](auto& x,auto& y){return x.first<y.first;});
+    std::array<std::pair<double,Vec3>,12> points{};
+    int npoints=0;
+    for(int i=0;i<poly.count;i++){
+        Vec3 p=poly.p[i];double d=dot(p-center,n);
+        if(d<=margin+1e-8)points[npoints++]={d,p};
+    }
+    std::sort(points.begin(),points.begin()+npoints,[](auto& x,auto& y){return x.first<y.first;});
     // Deepest first; clip polygon supplies up to eight and four suffice for demonstration.
-    for(auto& [d,p]:points){Vec3 projected=p-n*d;
+    for(int k=0;k<npoints;k++){auto [d,p]=points[k];Vec3 projected=p-n*d;
         if(refIsA)appendContact(A,B,projected,p,-n,result);
         else appendContact(A,B,p,projected,n,result);
     }
@@ -102,7 +119,7 @@ static void closestSegments(Vec3 p1,Vec3 q1,Vec3 p2,Vec3 q2,Vec3& c1,Vec3& c2){
     }
     c1=p1+d1*s;c2=p2+d2*t;
 }
-static void edgeContacts(const Body& A,const Body& B,const OBB& a,const OBB& b,const Axis& best,std::vector<Contact>& result){
+static void edgeContacts(const Body& A,const Body& B,const OBB& a,const OBB& b,const Axis& best,ContactBatch& result){
     int i=best.i,j=best.j;Vec3 ca=a.c,cb=b.c;
     for(int k=0;k<3;k++){if(k!=i)ca+=a.axis[k]*((dot(a.axis[k],best.n)>=0?1:-1)*a.h[k]);
                              if(k!=j)cb+=b.axis[k]*((dot(b.axis[k],-best.n)>=0?1:-1)*b.h[k]);}
@@ -130,9 +147,9 @@ static bool sphereBox(const Body& s,const Body& b,double margin,Vec3& ps,Vec3& p
     pb=b.p+b.q.rotate(p);ps=s.p-normal*r;
     return true;
 }
-static std::vector<Contact> collide(const Body& A,const Body& B,double margin){
+static ContactBatch collide(const Body& A,const Body& B,double margin){
     if(A.shape==Shape::Sphere || B.shape==Shape::Sphere){
-        std::vector<Contact> contacts;
+        ContactBatch contacts;
         if(A.shape==Shape::Sphere && B.shape==Shape::Sphere){
             Vec3 d=A.p-B.p;const double dist=length(d),r=A.half.x+B.half.x;
             if(dist<=r+margin){Vec3 n=dist>EPS?d/dist:Vec3{1,0,0};appendContact(A,B,A.p-n*A.half.x,B.p+n*B.half.x,n,contacts);}
@@ -147,8 +164,8 @@ static std::vector<Contact> collide(const Body& A,const Body& B,double margin){
     for(int i=0;i<3;i++)if(!satAxis(a,b,delta,a.axis[i],0,i,-1,margin,face))return {};
     for(int j=0;j<3;j++)if(!satAxis(a,b,delta,b.axis[j],1,-1,j,margin,face))return {};
     for(int i=0;i<3;i++)for(int j=0;j<3;j++)if(!satAxis(a,b,delta,cross(a.axis[i],b.axis[j]),2,i,j,margin,edge))return {};
-    if(edge.type!=-1 && edge.sep>face.sep+0.015){std::vector<Contact> c;edgeContacts(A,B,a,b,edge,c);return c;}
-    std::vector<Contact> c;faceContacts(A,B,a,b,face,face.type==0,c,margin);return c;
+    if(edge.type!=-1 && edge.sep>face.sep+0.015){ContactBatch c;edgeContacts(A,B,a,b,edge,c);return c;}
+    ContactBatch c;faceContacts(A,B,a,b,face,face.type==0,c,margin);return c;
 }
 static Vec3 tangent1(Vec3 n){Vec3 t=std::abs(n.x)>0.65?cross(n,{0,1,0}):cross(n,{1,0,0});return normalized(t);}
 static void addRow(double (&H)[6][6],double (&g)[6],const double* J,double k,double force){
@@ -788,7 +805,7 @@ void World::stepDiscrete(){
     stats_.pairs=static_cast<int>(work.size());
     // Each narrowphase call reads only body poses and writes a private slot.
     // Manifolds, warmstarting and contact IDs are merged in stable pair order.
-    std::vector<std::vector<Contact>> generated(work.size());
+    std::vector<ContactBatch> generated(work.size());
     if(settings.parallelThreads<0)throw std::invalid_argument("parallelThreads must be >= 0");
     const int threads=settings.parallelThreads;
 #ifdef AVBD_HAS_OPENMP
@@ -804,7 +821,7 @@ void World::stepDiscrete(){
         if(contacts.empty())continue;
         auto old=manifolds_.find({a,b});
         if(old!=manifolds_.end()){
-            std::vector<bool> used(old->second.contacts.size());
+            std::array<bool,ContactBatch::capacity> used{};
             for(Contact& c:contacts){double score=1e99;int best=-1;
                 for(size_t j=0;j<old->second.contacts.size();j++){
                     const auto& prev=old->second.contacts[j];
@@ -833,11 +850,12 @@ void World::stepDiscrete(){
             // Preserve the ordered-map node for pairs that persist across frames.
             // The previous witnesses have already been used for warmstarting.
             auto node=manifolds_.extract(old);
-            node.mapped().contacts.clear();
-            node.mapped().contacts.swap(contacts);
+            // Continuing pairs retain vector capacity when large enough;
+            // copy only active witnesses, never dormant scratch slots.
+            node.mapped().contacts.assign(contacts.begin(),contacts.end());
             next.insert(std::move(node));
         }else{
-            next[{a,b}]={a,b,std::move(contacts)};
+            next[{a,b}]={a,b,{contacts.begin(),contacts.end()}};
         }
     }
     manifolds_=std::move(next);stats_.manifolds=static_cast<int>(manifolds_.size());

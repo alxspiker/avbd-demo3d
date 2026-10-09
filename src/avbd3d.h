@@ -1,8 +1,10 @@
 #pragma once
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <limits>
+#include <stdexcept>
 #include <vector>
 
 namespace avbd {
@@ -59,6 +61,26 @@ struct Contact {
     double kN=1000,kT1=1000,kT2=1000;
     double impactSpeed=0; // Closing speed measured at the beginning of a new contact
     bool matched=false;
+};
+// Box SAT produces at most four witnesses per contact pair. Keep them inline:
+// no per-pair narrowphase, clipping, or persistent-manifold contact allocations.
+struct ContactBatch {
+    static constexpr size_t capacity=4;
+    std::array<Contact,capacity> entries{};
+    uint8_t count=0;
+    size_t size() const {return count;}
+    bool empty() const {return count==0;}
+    void clear(){count=0;}
+    void push_back(const Contact& c){
+        if(count>=capacity)throw std::length_error("contact manifold overflow");
+        entries[count++]=c;
+    }
+    Contact& operator[](size_t i){return entries[i];}
+    const Contact& operator[](size_t i) const{return entries[i];}
+    Contact* begin(){return entries.data();}
+    Contact* end(){return entries.data()+count;}
+    const Contact* begin() const{return entries.data();}
+    const Contact* end() const{return entries.data()+count;}
 };
 struct Manifold {int a=-1,b=-1; std::vector<Contact> contacts;};
 struct DistanceJoint {
