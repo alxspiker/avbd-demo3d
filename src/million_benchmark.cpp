@@ -10,11 +10,13 @@ int main(int argc,char** argv){
     const int steps=argc>2?std::atoi(argv[2]):3;
     const std::string mode=argc>3?argv[3]:"certified";
     if(n<1||n>1000000||steps<1||steps>100||
-       (mode!="certified"&&mode!="bvh")){
-        std::fprintf(stderr,"usage: avbd3d_million_benchmark <1..1000000 bodies> <1..100 steps> [certified|bvh]\n");return 2;
+       (mode!="certified"&&mode!="bvh"&&mode!="soa"&&mode!="soa_bvh"&&mode!="flat"&&mode!="soa_flat")){
+        std::fprintf(stderr,"usage: avbd3d_million_benchmark <1..1000000 bodies> <1..100 steps> [certified|bvh|soa|soa_bvh|flat|soa_flat]\n");return 2;
     }
     auto start=std::chrono::steady_clock::now();
-    World w;w.settings.enableCertifiedFreeFlight=(mode=="certified");
+    World w;w.settings.enableCertifiedFreeFlight=(mode=="certified" || mode=="soa" || mode=="flat" || mode=="soa_flat");
+    w.settings.enableDataOrientedPredictor=(mode=="soa" || mode=="soa_bvh" || mode=="soa_flat");
+    w.settings.enableFlatFreeFlightCertificate=(mode=="flat" || mode=="soa_flat");
     w.settings.enableSpatialBroadphase=true;
     w.settings.iterations=7;w.settings.postIterations=4;
     w.settings.gravity={0,-.31,0};
@@ -32,7 +34,7 @@ int main(int argc,char** argv){
         w.step();
         double elapsed=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-begin).count();
         maxstep=std::max(maxstep,elapsed);totalstep+=elapsed;
-        if(mode=="certified"&&!w.statistics().certifiedFreeFlight)
+        if((mode=="certified"||mode=="soa"||mode=="flat"||mode=="soa_flat")&&!w.statistics().certifiedFreeFlight)
             throw std::runtime_error("sparse certificate rejected; do not count as successful fast-path benchmark");
     }
     const Body& first=w.body(0);const Body& last=w.body(n-1);

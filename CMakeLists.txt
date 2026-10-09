@@ -73,3 +73,12 @@ target_link_libraries(avbd3d_million_benchmark PRIVATE avbd3d)
 add_executable(avbd3d_soa_reference src/soa_reference.cpp)
 add_executable(avbd3d_freeflight_capture src/freeflight_capture.cpp)
 target_link_libraries(avbd3d_freeflight_capture PRIVATE avbd3d)
+
+# Stage 11: compare actual World::step packed-body predictor with AoS.
+add_executable(avbd3d_data_layout_tests tests/data_layout.cpp)
+target_link_libraries(avbd3d_data_layout_tests PRIVATE avbd3d)
+add_test(NAME data_layout COMMAND avbd3d_data_layout_tests)
+add_executable(avbd3d_layout_capture src/layout_capture.cpp)
+target_link_libraries(avbd3d_layout_capture PRIVATE avbd3d)
+add_executable(avbd3d_layout_benchmark src/layout_benchmark.cpp)
+target_link_libraries(avbd3d_layout_benchmark PRIVATE avbd3d)

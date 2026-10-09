@@ -302,12 +302,11 @@ struct FreeCellHash {
             mix(static_cast<uint64_t>(c.z)+0x243f6a8885a308d3ULL));
     }
 };
-static bool certifySeparatedPredictedAABBs(const std::vector<Body>& bodies,const Settings& settings){
+template <class InsertCell>
+static bool certifyPredictedAABBs(const std::vector<Body>& bodies,const Settings& settings,InsertCell insert){
     const double cell=settings.freeFlightCellSize;
     if(!(cell>0) || !std::isfinite(cell))throw std::invalid_argument("freeFlightCellSize must be finite and positive");
-    std::unordered_set<FreeCell,FreeCellHash> occupied;
     if(bodies.size()>static_cast<size_t>(std::numeric_limits<int>::max()))return false;
-    occupied.reserve(bodies.size()*2);
     const double dt=settings.dt;
     for(const Body& b:bodies){
         const Vec3 p=b.dynamic() ? b.p + b.velocity*dt + settings.gravity*(dt*dt) : b.p;
@@ -329,9 +328,58 @@ static bool certifySeparatedPredictedAABBs(const std::vector<Body>& bodies,const
         const int64_t az=static_cast<int64_t>(std::floor(lo.z)),bz=static_cast<int64_t>(std::floor(hi.z));
         if(bx-ax>1||by-ay>1||bz-az>1)return false;
         for(int64_t x=ax;x<=bx;x++)for(int64_t y=ay;y<=by;y++)for(int64_t z=az;z<=bz;z++)
-            if(!occupied.insert({x,y,z}).second)return false;
+            if(!insert({x,y,z}))return false;
     }
     return true;
+}
+static bool certifySeparatedPredictedAABBs(const std::vector<Body>& bodies,const Settings& settings){
+    std::unordered_set<FreeCell,FreeCellHash> occupied;
+    occupied.reserve(bodies.size()*2);
+    return certifyPredictedAABBs(bodies,settings,[&](FreeCell cell){
+        return occupied.insert(cell).second;
+    });
+}
+// A reusable, flat hash table avoids one heap allocation per occupied cell.
+// If the table becomes excessively full, refuse the certificate and run
+// ordinary contact detection: this affects performance, never correctness.
+bool World::certifyFlatFreeFlight(){
+    if(bodies_.size()>static_cast<size_t>(std::numeric_limits<int>::max()))return false;
+    if(bodies_.size()>(std::numeric_limits<size_t>::max()/4))return false;
+    size_t capacity=16;
+    const size_t target=bodies_.size()*2+8;
+    while(capacity<target){
+        if(capacity>std::numeric_limits<size_t>::max()/2)return false;
+        capacity*=2;
+    }
+    if(flatCellKeys_.size()<capacity){
+        flatCellKeys_.resize(capacity);
+        flatCellEpochs_.resize(capacity,0);
+    }
+    // Once grown, keep using the entire buffer so its hash mask stays correct.
+    capacity=flatCellKeys_.size();
+    if(++flatEpoch_==0){
+        std::fill(flatCellEpochs_.begin(),flatCellEpochs_.end(),0);
+        flatEpoch_=1;
+    }
+    const size_t mask=capacity-1;
+    const FreeCellHash hash{};
+    size_t filled=0;
+    return certifyPredictedAABBs(bodies_,settings,[&](FreeCell c){
+        if(filled>=capacity*7/10)return false;
+        size_t slot=hash(c)&mask;
+        for(size_t probe=0;probe<capacity;probe++){
+            if(flatCellEpochs_[slot]!=flatEpoch_){
+                flatCellEpochs_[slot]=flatEpoch_;
+                flatCellKeys_[slot]={c.x,c.y,c.z};
+                ++filled;
+                return true;
+            }
+            const FlatCell& seen=flatCellKeys_[slot];
+            if(seen.x==c.x&&seen.y==c.y&&seen.z==c.z)return false;
+            slot=(slot+1)&mask;
+        }
+        return false;
+    });
 }
 
 // Joint/contact connectivity through dynamic bodies only. A shared static
@@ -618,6 +666,50 @@ void World::stepCCD(){
     stats_=aggregate;
 }
 
+// Stage 11: persistent structure-of-arrays buffers are fed from the public,
+// authoritative AoS Body state on EVERY step. This is necessary because callers
+// can retain and mutate Body& references. Each stream is contiguous and may be
+// vectorized independently; quaternion dynamics remain in the original engine.
+// The contact/constraint solver consumes the same Body values as before.
+// Not a GPU solver, nor a replacement for dense-contact AoS constraint storage.
+void World::predictDataOriented(){
+    const size_t count=bodies_.size();
+    motion_.resize(count); // reuses previously allocated storage
+    const double dt=settings.dt;
+    const Vec3 gravityStep=settings.gravity*(dt*dt);
+    if(count>static_cast<size_t>(std::numeric_limits<int>::max()))
+        throw std::runtime_error("data-oriented predictor exceeded supported body count");
+    const int n=static_cast<int>(count);
+    // Gather: body mutations made through World::body() remain observable.
+#ifdef AVBD_HAS_OPENMP
+#pragma omp parallel for schedule(static) if(n>=50000 && settings.parallelThreads>1) num_threads(settings.parallelThreads>0?settings.parallelThreads:1)
+#endif
+    for(int i=0;i<n;i++){
+        const Body& b=bodies_[i];
+        motion_.moving[i]=static_cast<uint8_t>(b.dynamic()&&!b.sleeping);
+        motion_.px[i]=b.p.x;motion_.py[i]=b.p.y;motion_.pz[i]=b.p.z;
+        motion_.vx[i]=b.velocity.x;motion_.vy[i]=b.velocity.y;motion_.vz[i]=b.velocity.z;
+    }
+    // Actual engine inertial translation update, not an isolated benchmark.
+#ifdef AVBD_HAS_OPENMP
+#pragma omp parallel for schedule(static) if(n>=50000 && settings.parallelThreads>1) num_threads(settings.parallelThreads>0?settings.parallelThreads:1)
+#endif
+    for(int i=0;i<n;i++)if(motion_.moving[i]){
+        motion_.px[i]+=motion_.vx[i]*dt+gravityStep.x;
+        motion_.py[i]+=motion_.vy[i]*dt+gravityStep.y;
+        motion_.pz[i]+=motion_.vz[i]*dt+gravityStep.z;
+    }
+    // Scatter while preserving the existing full 3D rotational prediction.
+#ifdef AVBD_HAS_OPENMP
+#pragma omp parallel for schedule(static) if(n>=50000 && settings.parallelThreads>1) num_threads(settings.parallelThreads>0?settings.parallelThreads:1)
+#endif
+    for(int i=0;i<n;i++)if(motion_.moving[i]){
+        Body& b=bodies_[i];
+        b.p={motion_.px[i],motion_.py[i],motion_.pz[i]};
+        b.q=(Quat::exp(b.angularVelocity*dt)*b.q).unit();
+    }
+}
+
 void World::stepDiscrete(){
     const double dt=settings.dt;if(settings.postIterations<1||settings.iterations<1)throw std::runtime_error("positive solver iteration counts required");if(dt<=0)throw std::runtime_error("positive fixed step required");
     // A certified isolated discrete frame has no constraint rows. The unconstrained
@@ -627,12 +719,25 @@ void World::stepDiscrete(){
     if(settings.enableCertifiedFreeFlight && !settings.enableCCD &&
        !settings.enableSleeping && !settings.enableAdaptiveSubsteps &&
        joints_.empty() && manifolds_.empty() &&
-       certifySeparatedPredictedAABBs(bodies_,settings)){
+       (settings.enableFlatFreeFlightCertificate ? certifyFlatFreeFlight() :
+        certifySeparatedPredictedAABBs(bodies_,settings))){
         stats_={};stats_.certifiedFreeFlight=1;stats_.ccdSubsteps=1;
+        // The packed predictor updates exactly the same engine bodies.
+        // Preserve old positions/orientations for BDF1 reconstruction.
+        std::vector<Vec3> previousP;
+        std::vector<Quat> previousQ;
+        if(settings.enableDataOrientedPredictor){
+            previousP.reserve(bodies_.size());previousQ.reserve(bodies_.size());
+            for(const Body& b:bodies_){previousP.push_back(b.p);previousQ.push_back(b.q);}
+            predictDataOriented();
+        }
         for(Body& b:bodies_)if(b.dynamic()){
-            const Vec3 previous=b.p;const Quat prevQ=b.q;
-            b.p+=b.velocity*dt+settings.gravity*(dt*dt);
-            b.q=(Quat::exp(b.angularVelocity*dt)*b.q).unit();
+            const Vec3 previous=settings.enableDataOrientedPredictor?previousP[b.id]:b.p;
+            const Quat prevQ=settings.enableDataOrientedPredictor?previousQ[b.id]:b.q;
+            if(!settings.enableDataOrientedPredictor){
+                b.p+=b.velocity*dt+settings.gravity*(dt*dt);
+                b.q=(Quat::exp(b.angularVelocity*dt)*b.q).unit();
+            }
             b.velocity=(b.p-previous)/dt;
             b.angularVelocity=(b.q*prevQ.conjugate()).log()/dt;
             if(!std::isfinite(b.p.x)||!std::isfinite(b.p.y)||!std::isfinite(b.p.z)||!std::isfinite(b.q.w))
@@ -648,11 +753,12 @@ void World::stepDiscrete(){
     stats_={};
     std::vector<Vec3> startP(bodies_.size()),startV(bodies_.size()),startW(bodies_.size());std::vector<Quat> startQ(bodies_.size());
     for(Body& b:bodies_){startP[b.id]=b.p;startQ[b.id]=b.q;startV[b.id]=b.velocity;startW[b.id]=b.angularVelocity;
-        if(b.dynamic()&&!b.sleeping){
+        if(!settings.enableDataOrientedPredictor && b.dynamic()&&!b.sleeping){
             b.p+=b.velocity*dt+settings.gravity*(dt*dt);
             b.q=(Quat::exp(b.angularVelocity*dt)*b.q).unit();
         }
     }
+    if(settings.enableDataOrientedPredictor)predictDataOriented();
     std::vector<Vec3> inertialP;std::vector<Quat> inertialQ;
     inertialP.reserve(bodies_.size());inertialQ.reserve(bodies_.size());
     for(const auto& b:bodies_){inertialP.push_back(b.p);inertialQ.push_back(b.q);}

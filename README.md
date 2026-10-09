@@ -1,5 +1,20 @@
 # AVBD Demo 3D — experimental physics core
 
+## Stage 11 — CPU motion layout and flat free-flight grid (October 2026)
+
+**New on `main`:** `Settings::enableDataOrientedPredictor` integrates a reusable six-channel structure-of-arrays translation predictor into **actual `World::step()` calls**, preserving the external `Body` API, quaternion dynamics, CCD, joints and full AVBD contact solving. Because `Body&` can be externally mutated, it gathers/scatters each step. That memory transfer has a real cost: this bridge is **not** a full SoA constraint solver.
+
+`Settings::enableFlatFreeFlightCertificate` adds a reusable contiguous 3D occupancy table to the Stage 10 **zero-contact** isolation proof. Either optimization is opt-in. In three repeat local million-body sparse runs (4 steps each), the baseline averaged **464 ms/step**, flat-grid **295 ms/step**, and flat-grid plus SoA predictor **343 ms/step**. The packed predictor did not beat the flat-only path. A separate full-solver 324-body contact scene achieved identical terminal states and contact counts with and without the packed predictor; timings vary by hardware.
+
+- [Stage 11 architecture, validation, benchmark limitations](docs/STAGE11_DATA_LAYOUT.md)
+- [Stage 11 Kaggle CPU comparison + optional CUDA notebook](notebooks/avbd_stage11_kaggle.ipynb)
+- `avbd3d_layout_benchmark aos|soa 120` measures the real contact-rich solver.
+- `avbd3d_million_benchmark 1000000 4 certified|flat|soa_flat` measures real sparse World steps.
+- `avbd3d_layout_capture` and `tools/render_layout.py` generate a reviewed replay of 324 bodies with real contacts.
+
+**Not achieved:** 1 million densely interacting objects at real-time speed, a full SoA AVBD constraint/contact solver, and GPU-based collision solving. Stage 10's T4 CUDA kernel was **translation only**.
+
+
 An independent, **headless C++17** experimental 3D physics engine based on the ideas of [Augmented Vertex Block Descent (AVBD)](https://graphics.cs.utah.edu/research/projects/avbd/) and Chris Giles' educational [2D AVBD demo](https://github.com/savant117/avbd-demo2d). The old SDL/OpenGL prototype was replaced with a testable physics library.
 
 **Status:** early-stage engine, **not a complete implementation of the SIGGRAPH AVBD paper** and not comparable yet to the research project's GPU throughput. Do not mistake the rendered videos for correctness proofs. A reproducible, measured core is the priority.

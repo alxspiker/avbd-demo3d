@@ -98,6 +98,8 @@ struct Settings {
     bool enableParallelNarrowphase=false; // Parallel independent contact generation; stable serial manifold merge
     bool enableIslandSolver=false; // Parallel disconnected constraint islands, with graph-color fallback
     bool enableCertifiedFreeFlight=false; // Stage 10: exact discrete-step separation certificate, skip zero-contact AVBD solver
+    bool enableDataOrientedPredictor=false; // Stage 11: packed SoA translation predictor in real World::step; AoS remains authoritative
+    bool enableFlatFreeFlightCertificate=false; // Stage 11: reusable contiguous open-addressed isolation grid
     double freeFlightCellSize=2.0; // Positive world-space voxel width for the conservative certificate
     int parallelThreads=0; // 0 = OpenMP default
     bool enableAdaptiveSubsteps=false; // Conservative discrete substepping; NOT exact swept CCD
@@ -128,6 +130,20 @@ public:
 private:
     void stepDiscrete();
     void stepCCD();
+    void predictDataOriented(); // Full-body translation + quaternion predictor, lossless AoS/SoA bridge
+    bool certifyFlatFreeFlight(); // Conservative certificate; never assumes a hash collision is safe
+    struct FlatCell {int64_t x=0,y=0,z=0;};
+    std::vector<FlatCell> flatCellKeys_;
+    std::vector<uint32_t> flatCellEpochs_;
+    uint32_t flatEpoch_=0;
+    struct MotionSoA {
+        std::vector<double> px,py,pz,vx,vy,vz;
+        std::vector<uint8_t> moving;
+        void resize(size_t n){
+            px.resize(n);py.resize(n);pz.resize(n);
+            vx.resize(n);vy.resize(n);vz.resize(n);moving.resize(n);
+        }
+    } motion_;
     std::vector<Body> bodies_;
     std::vector<DistanceJoint> joints_;
     std::map<std::pair<int,int>,Manifold> manifolds_;
