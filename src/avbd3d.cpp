@@ -3,6 +3,7 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <set>
 
 namespace avbd {
 static constexpr double EPS=1e-12;
@@ -17,6 +18,12 @@ Vec3 Quat::log() const {Quat q=unit();if(q.w<0){q={-q.w,-q.x,-q.y,-q.z};}double 
 
 struct Mat3 {double a[3][3]{}; Vec3 times(Vec3 x) const{return {a[0][0]*x.x+a[0][1]*x.y+a[0][2]*x.z,a[1][0]*x.x+a[1][1]*x.y+a[1][2]*x.z,a[2][0]*x.x+a[2][1]*x.y+a[2][2]*x.z};}};
 static Mat3 worldInertia(const Body& b){Mat3 I;Vec3 axes[3]={b.q.rotate({1,0,0}),b.q.rotate({0,1,0}),b.q.rotate({0,0,1})};for(int k=0;k<3;k++)for(int i=0;i<3;i++)for(int j=0;j<3;j++)I.a[i][j]+=b.inertia[k]*axes[k][i]*axes[k][j];return I;}
+static Vec3 inverseInertiaTimes(const Body& b,Vec3 v){
+    if(!b.dynamic())return {};
+    const Vec3 axes[3]={b.q.rotate({1,0,0}),b.q.rotate({0,1,0}),b.q.rotate({0,0,1})};
+    return axes[0]*(dot(axes[0],v)*b.invInertia.x)+axes[1]*(dot(axes[1],v)*b.invInertia.y)+axes[2]*(dot(axes[2],v)*b.invInertia.z);
+}
+static Vec3 contactVelocity(const Body& b,Vec3 localPoint){return b.velocity+cross(b.angularVelocity,b.q.rotate(localPoint));}
 struct OBB {Vec3 c,h,axis[3];};
 static OBB obb(const Body& b){return {b.p,b.half,{b.q.rotate({1,0,0}),b.q.rotate({0,1,0}),b.q.rotate({0,0,1})}};}
 static double radius(const OBB& a,Vec3 n){return std::abs(dot(n,a.axis[0]))*a.h.x+std::abs(dot(n,a.axis[1]))*a.h.y+std::abs(dot(n,a.axis[2]))*a.h.z;}
@@ -94,7 +101,40 @@ static void edgeContacts(const Body& A,const Body& B,const OBB& a,const OBB& b,c
     Vec3 pa,pb;closestSegments(ca-a.axis[i]*a.h[i],ca+a.axis[i]*a.h[i],cb-b.axis[j]*b.h[j],cb+b.axis[j]*b.h[j],pa,pb);
     appendContact(A,B,pa,pb,-best.n,result);
 }
+static bool sphereBox(const Body& s,const Body& b,double margin,Vec3& ps,Vec3& pb,Vec3& normal){
+    const Vec3 bc=b.q.conjugate().rotate(s.p-b.p);
+    Vec3 p={std::clamp(bc.x,-b.half.x,b.half.x),std::clamp(bc.y,-b.half.y,b.half.y),std::clamp(bc.z,-b.half.z,b.half.z)};
+    Vec3 delta=bc-p;
+    const double ds=length2(delta),r=s.half.x;
+    if(ds>EPS){
+        const double d=std::sqrt(ds);if(d>r+margin)return false;
+        normal=b.q.rotate(delta/d);
+    }else{
+        // Sphere center inside box: push toward the nearest exit face.
+        double best=1e100;int index=0;double sign=1;
+        for(int i=0;i<3;i++)for(double si:{-1.0,1.0}){
+            const double gap=b.half[i]-si*bc[i];
+            if(gap<best){best=gap;index=i;sign=si;}
+        }
+        Vec3 n{}; if(index==0){n.x=sign;p.x=sign*b.half.x;}else if(index==1){n.y=sign;p.y=sign*b.half.y;}else{n.z=sign;p.z=sign*b.half.z;}
+        normal=b.q.rotate(n);
+    }
+    pb=b.p+b.q.rotate(p);ps=s.p-normal*r;
+    return true;
+}
 static std::vector<Contact> collide(const Body& A,const Body& B,double margin){
+    if(A.shape==Shape::Sphere || B.shape==Shape::Sphere){
+        std::vector<Contact> contacts;
+        if(A.shape==Shape::Sphere && B.shape==Shape::Sphere){
+            Vec3 d=A.p-B.p;const double dist=length(d),r=A.half.x+B.half.x;
+            if(dist<=r+margin){Vec3 n=dist>EPS?d/dist:Vec3{1,0,0};appendContact(A,B,A.p-n*A.half.x,B.p+n*B.half.x,n,contacts);}
+        }else if(A.shape==Shape::Sphere){
+            Vec3 ps,pb,n;if(sphereBox(A,B,margin,ps,pb,n))appendContact(A,B,ps,pb,n,contacts);
+        }else{
+            Vec3 ps,pb,n;if(sphereBox(B,A,margin,ps,pb,n))appendContact(A,B,pb,ps,-n,contacts);
+        }
+        return contacts;
+    }
     OBB a=obb(A),b=obb(B);Vec3 delta=b.c-a.c;Axis face,edge;
     for(int i=0;i<3;i++)if(!satAxis(a,b,delta,a.axis[i],0,i,-1,margin,face))return {};
     for(int j=0;j<3;j++)if(!satAxis(a,b,delta,b.axis[j],1,-1,j,margin,face))return {};
@@ -136,13 +176,81 @@ int World::addBox(Vec3 center,Vec3 size,double density,double friction,Quat orie
     }
     bodies_.push_back(b);return b.id;
 }
+int World::addSphere(Vec3 center,double radius,double density,double friction){
+    if(radius<=0 || !std::isfinite(radius))throw std::invalid_argument("positive finite sphere radius required");
+    if(density<0||friction<0)throw std::invalid_argument("density/friction must be nonnegative");
+    Body b;b.id=static_cast<int>(bodies_.size());b.shape=Shape::Sphere;b.p=center;
+    b.half={radius,radius,radius};b.friction=friction;
+    constexpr double pi=3.14159265358979323846;
+    b.mass=density*(4.0/3.0)*pi*radius*radius*radius;b.invMass=b.mass>0?1/b.mass:0;
+    if(b.dynamic()){
+        const double i=0.4*b.mass*radius*radius;
+        b.inertia={i,i,i};b.invInertia={1/i,1/i,1/i};
+    }
+    bodies_.push_back(b);return b.id;
+}
+int World::addDistanceJoint(int a,int b,Vec3 worldAnchorA,Vec3 worldAnchorB,
+                            double restLength,double stiffness,double breakForce){
+    if(a<0||b<0||a>=static_cast<int>(bodies_.size())||b>=static_cast<int>(bodies_.size())||a==b)
+        throw std::invalid_argument("joint bodies must exist and be different");
+    if(restLength<0||stiffness<=0||breakForce<=0)throw std::invalid_argument("invalid joint properties");
+    DistanceJoint j;j.a=a;j.b=b;j.anchorA=local(bodies_[a],worldAnchorA);j.anchorB=local(bodies_[b],worldAnchorB);
+    j.restLength=restLength;j.stiffness=stiffness;j.breakForce=breakForce;
+    j.penalty=std::min(settings.initialPenalty,stiffness);
+    joints_.push_back(j);return static_cast<int>(joints_.size()-1);
+}
+static double jointConstraint(const Body& a,const Body& b,const DistanceJoint& j,Vec3& n){
+    const Vec3 d=anchor(a,j.anchorA)-anchor(b,j.anchorB);
+    const double dist=length(d);
+    n=dist>EPS?d/dist:Vec3{0,1,0};
+    return dist-j.restLength;
+}
 struct Interval{int i;double minX,maxX;};
+void World::wakeBody(int id){Body& b=body(id);b.sleeping=false;b.quietTime=0;}
 void World::step(){
+    if(!settings.enableSleeping)for(auto& b:bodies_){b.sleeping=false;b.quietTime=0;}
+    if(settings.enableSleeping)for(auto& b:bodies_)if(b.sleeping &&
+        (length(b.velocity)>settings.sleepLinearThreshold || length(b.angularVelocity)>settings.sleepAngularThreshold))
+        wakeBody(b.id);
+    if(settings.dt<=0)throw std::invalid_argument("dt must be positive");
+    if(settings.maxSubsteps<1||settings.maxMotionFraction<=0)throw std::invalid_argument("invalid adaptive substep settings");
+    int substeps=1;
+    if(settings.enableAdaptiveSubsteps){
+        double maxRatio=0;
+        for(const Body& b:bodies_)if(b.dynamic()){
+            const double minSize=2*std::min({b.half.x,b.half.y,b.half.z});
+            const double diameter=2*length(b.half);
+            const double motion=(length(b.velocity)+length(b.angularVelocity)*diameter*.5+length(settings.gravity)*settings.dt)*settings.dt;
+            maxRatio=std::max(maxRatio,motion/(settings.maxMotionFraction*minSize));
+        }
+        substeps=std::clamp(static_cast<int>(std::ceil(std::min(maxRatio,1e9))),1,settings.maxSubsteps);
+    }
+    if(substeps==1){stepDiscrete();stats_.ccdSubsteps=1;return;}
+    const double fullDT=settings.dt;
+    Statistics aggregate{};
+    try{
+        settings.dt=fullDT/substeps;
+        for(int i=0;i<substeps;i++){
+            stepDiscrete();
+            aggregate.impactEvents+=stats_.impactEvents;
+            aggregate.brokenJoints+=stats_.brokenJoints;
+            aggregate.pairs+=stats_.pairs;
+            aggregate.maxPenetration=std::max(aggregate.maxPenetration,stats_.maxPenetration);
+            aggregate.maxSpeed=std::max(aggregate.maxSpeed,stats_.maxSpeed);
+            aggregate.maxAngularSpeed=std::max(aggregate.maxAngularSpeed,stats_.maxAngularSpeed);
+        }
+    }catch(...){settings.dt=fullDT;throw;}
+    settings.dt=fullDT;
+    aggregate.manifolds=stats_.manifolds;aggregate.contacts=stats_.contacts;
+    aggregate.sleepingBodies=stats_.sleepingBodies;aggregate.ccdSubsteps=substeps;
+    stats_=aggregate;
+}
+void World::stepDiscrete(){
     const double dt=settings.dt;if(settings.postIterations<1||settings.iterations<1)throw std::runtime_error("positive solver iteration counts required");if(dt<=0)throw std::runtime_error("positive fixed step required");
     stats_={};
-    std::vector<Vec3> startP(bodies_.size());std::vector<Quat> startQ(bodies_.size());
-    for(Body& b:bodies_){startP[b.id]=b.p;startQ[b.id]=b.q;
-        if(b.dynamic()){
+    std::vector<Vec3> startP(bodies_.size()),startV(bodies_.size()),startW(bodies_.size());std::vector<Quat> startQ(bodies_.size());
+    for(Body& b:bodies_){startP[b.id]=b.p;startQ[b.id]=b.q;startV[b.id]=b.velocity;startW[b.id]=b.angularVelocity;
+        if(b.dynamic()&&!b.sleeping){
             b.p+=b.velocity*dt+settings.gravity*(dt*dt);
             b.q=(Quat::exp(b.angularVelocity*dt)*b.q).unit();
         }
@@ -155,13 +263,20 @@ void World::step(){
     std::vector<Vec3> aabb(bodies_.size());
     for(const Body& b:bodies_){OBB ob=obb(b);Vec3 r;
         for(int i=0;i<3;i++){r+=Vec3{std::abs(ob.axis[i].x),std::abs(ob.axis[i].y),std::abs(ob.axis[i].z)}*ob.h[i];}
+        if(b.shape==Shape::Sphere)r=b.half;
         aabb[b.id]=r;interval.push_back({b.id,b.p.x-r.x-settings.contactMargin,b.p.x+r.x+settings.contactMargin});
     }
     std::sort(interval.begin(),interval.end(),[](const auto& a,const auto& b){return a.minX<b.minX;});
     std::map<std::pair<int,int>,Manifold> next;
+    // Adjacent parts of a jointed assembly share anchors; their collision
+    // shapes may overlap legitimately (e.g. chain links or ball/socket).
+    std::set<std::pair<int,int>> linkedPairs;
+    for(const auto& joint:joints_)if(joint.enabled)
+        linkedPairs.insert({std::min(joint.a,joint.b),std::max(joint.a,joint.b)});
     for(size_t i=0;i<interval.size();i++)for(size_t j=i+1;j<interval.size()&&interval[j].minX<=interval[i].maxX;j++){
         int a=std::min(interval[i].i,interval[j].i),b=std::max(interval[i].i,interval[j].i);
         if(!bodies_[a].dynamic()&&!bodies_[b].dynamic())continue;
+        if(linkedPairs.count({a,b}))continue;
         Vec3 d=bodies_[a].p-bodies_[b].p,r=aabb[a]+aabb[b];
         if(std::abs(d.y)>r.y+settings.contactMargin||std::abs(d.z)>r.z+settings.contactMargin)continue;
         stats_.pairs++;
@@ -188,24 +303,54 @@ void World::step(){
             c.kT1=std::clamp(c.kT1,settings.initialPenalty,settings.maxPenalty);
             c.kT2=std::clamp(c.kT2,settings.initialPenalty,settings.maxPenalty);
             c.initialDelta=(startP[a]+startQ[a].rotate(c.rA))-(startP[b]+startQ[b].rotate(c.rB));
+            if(!c.matched){
+                Vec3 rA=startQ[a].rotate(c.rA),rB=startQ[b].rotate(c.rB);
+                Vec3 vA=startV[a]+cross(startW[a],rA),vB=startV[b]+cross(startW[b],rB);
+                c.impactSpeed=std::min(0.0,dot(vA-vB,c.n));
+            }
         }
         next[{a,b}]={a,b,std::move(contacts)};
     }
     manifolds_=std::move(next);stats_.manifolds=static_cast<int>(manifolds_.size());
     // Per-body force lists, rebuilt from stable manifold keys.
+    std::vector<bool> touched(bodies_.size(),false);
+    // Wake a resting body that is struck by a moving one. The whole contact
+    // manifold will then participate in this step's AVBD primal iterations.
+    if(settings.enableSleeping){
+        for(const auto& [key,m]:manifolds_){
+            Body& a=bodies_[m.a],&b=bodies_[m.b];
+            if(a.sleeping && b.dynamic() && !b.sleeping &&
+                 (length(b.velocity)>settings.wakeLinearThreshold||length(b.angularVelocity)>settings.wakeLinearThreshold))wakeBody(a.id);
+            if(b.sleeping && a.dynamic() && !a.sleeping &&
+                 (length(a.velocity)>settings.wakeLinearThreshold||length(a.angularVelocity)>settings.wakeLinearThreshold))wakeBody(b.id);
+        }
+        for(auto& j:joints_)if(j.enabled){
+            // Conservative policy: joints never sleep; a fixed body is unaffected.
+            if(bodies_[j.a].dynamic())wakeBody(j.a);
+            if(bodies_[j.b].dynamic())wakeBody(j.b);
+        }
+    }
     std::vector<std::vector<Manifold*>> acting(bodies_.size());
-    for(auto& [key,m]:manifolds_){acting[m.a].push_back(&m);acting[m.b].push_back(&m);stats_.contacts+=static_cast<int>(m.contacts.size());}
+    std::vector<std::vector<DistanceJoint*>> actingJoints(bodies_.size());
+    for(auto& j:joints_)if(j.enabled){
+        j.lambda*=settings.gamma;
+        j.penalty=std::max(settings.initialPenalty,std::min(j.penalty*settings.gamma,std::min(j.stiffness,settings.maxPenalty)));
+        actingJoints[j.a].push_back(&j);actingJoints[j.b].push_back(&j);
+    }
+    for(auto& [key,m]:manifolds_){acting[m.a].push_back(&m);acting[m.b].push_back(&m);
+        touched[m.a]=touched[m.b]=true;
+        stats_.contacts+=static_cast<int>(m.contacts.size());}
     for(int it=0;it<settings.iterations+settings.postIterations;it++){
         bool post=it>=settings.iterations;
         if(it==settings.iterations){
             // As in the 2D reference: BDF1 velocity is reconstructed before post-stabilization.
             // Geometric penetration repair does not become spurious kinetic energy.
-            for(Body& b:bodies_)if(b.dynamic()){
+            for(Body& b:bodies_)if(b.dynamic()&&!b.sleeping){
                 b.velocity=(b.p-startP[b.id])/dt;
                 b.angularVelocity=(b.q*startQ[b.id].conjugate()).log()/dt;
             }
         }
-        for(Body& body:bodies_){if(!body.dynamic())continue;
+        for(Body& body:bodies_){if(!body.dynamic()||body.sleeping)continue;
             double H[6][6]{},g[6]{};
             Mat3 I=worldInertia(body);
             double m=body.mass/(dt*dt);
@@ -230,14 +375,34 @@ void World::step(){
                     double f1=c.kT1*ct1+c.lambdaT1,f2=c.kT2*ct2+c.lambdaT2;
                     double mag=std::hypot(f1,f2);if(mag>maxTangential&&mag>EPS){f1*=maxTangential/mag;f2*=maxTangential/mag;}
                     if(maxTangential>0){auto J1=jacobian(body,c,t1,isA),J2=jacobian(body,c,t2,isA);
-                        addRow(H,g,*reinterpret_cast<const double(*)[6]>(J1.data()),c.kT1,f1);
-                        addRow(H,g,*reinterpret_cast<const double(*)[6]>(J2.data()),c.kT2,f2);
+                        addRow(H,g,J1.data(),c.kT1,f1);
+                        addRow(H,g,J2.data(),c.kT2,f2);
                     }
                 }
+            }
+            for(DistanceJoint* joint:actingJoints[body.id]){
+                if(!joint->enabled)continue;
+                Body& a=bodies_[joint->a];Body& b=bodies_[joint->b];
+                Vec3 n;const double C=jointConstraint(a,b,*joint,n);
+                const bool isA=(body.id==joint->a);
+                const Vec3 arm=body.q.rotate(isA?joint->anchorA:joint->anchorB);
+                const double sign=isA?1:-1;
+                const Vec3 ang=cross(arm,n)*sign,lin=n*sign;
+                const double J[6]={lin.x,lin.y,lin.z,ang.x,ang.y,ang.z};
+                const double penalty=post?std::min(joint->stiffness,std::max(joint->penalty,50000.)):joint->penalty;
+                const double force=std::clamp(joint->lambda+penalty*C,-joint->breakForce,joint->breakForce);
+                addRow(H,g,J,penalty,force);
             }
             double dx[6]{};if(!solveSPD(H,g,dx))throw std::runtime_error("AVBD 6x6 matrix lost positive definiteness");
             body.p-=Vec3(dx[0],dx[1],dx[2]);
             body.q=(Quat::exp(-Vec3(dx[3],dx[4],dx[5]))*body.q).unit();
+        }
+        if(!post)for(auto& joint:joints_)if(joint.enabled){
+            Vec3 n;const double C=jointConstraint(bodies_[joint.a],bodies_[joint.b],joint,n);
+            const double desired=joint.lambda+joint.penalty*C;
+            if(std::abs(desired)>=joint.breakForce){joint.enabled=false;stats_.brokenJoints++;continue;}
+            joint.lambda=desired;
+            joint.penalty=std::min({settings.maxPenalty,joint.stiffness,joint.penalty+settings.beta*std::abs(C)});
         }
         // Only the pre-stabilization phase updates duals and penalty state.
         if(!post)for(auto& [key,m]:manifolds_){const Body& a=bodies_[m.a],&b=bodies_[m.b];double mu=std::sqrt(a.friction*b.friction);
@@ -256,8 +421,42 @@ void World::step(){
             }
         }
     }
+    // Restitution is a velocity-level boundary condition after AVBD's non-bouncy
+    // position solve. Only brand-new, closing contacts bounce. Apply sequential
+    // impulses at their true world-space witness points, including angular mass.
+    // This is an explicit hybrid extension; it is not part of the original AVBD demo.
+    for(const auto& [key,m]:manifolds_){
+        Body& a=bodies_[m.a];Body& b=bodies_[m.b];
+        const double e=std::max(a.restitution,b.restitution);
+        if(e<=0)continue;
+        for(const Contact& c:m.contacts){
+            if(c.matched || c.impactSpeed>=-settings.restitutionThreshold)continue;
+            const Vec3 ra=a.q.rotate(c.rA),rb=b.q.rotate(c.rB);
+            const double vn=dot(contactVelocity(a,c.rA)-contactVelocity(b,c.rB),c.n);
+            const double target=-e*c.impactSpeed;
+            if(vn>=target)continue;
+            const Vec3 ja=cross(ra,c.n),jb=cross(rb,c.n);
+            const double k=a.invMass+b.invMass+dot(ja,inverseInertiaTimes(a,ja))+dot(jb,inverseInertiaTimes(b,jb));
+            if(k<1e-12)continue;
+            const double impulse=(target-vn)/k;
+            if(a.dynamic()){a.velocity+=c.n*(impulse*a.invMass);a.angularVelocity+=inverseInertiaTimes(a,ja)*impulse;}
+            if(b.dynamic()){b.velocity-=c.n*(impulse*b.invMass);b.angularVelocity-=inverseInertiaTimes(b,jb)*impulse;}
+            ++stats_.impactEvents;
+        }
+    }
     // BDF1 velocity reconstruction was performed before post-stabilization.
     for(Body& b:bodies_){if(!b.dynamic())continue;
+        if(settings.enableSleeping){
+            if(b.sleeping && !touched[b.id])wakeBody(b.id); // support disappeared
+            else if(!b.sleeping){
+                if(touched[b.id] && length(b.velocity)<settings.sleepLinearThreshold &&
+                   length(b.angularVelocity)<settings.sleepAngularThreshold){
+                    b.quietTime+=dt;
+                    if(b.quietTime>=settings.sleepAfterSeconds){b.sleeping=true;b.velocity={};b.angularVelocity={};}
+                }else b.quietTime=0;
+            }
+            if(b.sleeping)stats_.sleepingBodies++;
+        }
         if(!std::isfinite(b.p.x)||!std::isfinite(b.p.y)||!std::isfinite(b.p.z)||!std::isfinite(b.q.w))throw std::runtime_error("non-finite rigid-body state");
         stats_.maxSpeed=std::max(stats_.maxSpeed,length(b.velocity));
         stats_.maxAngularSpeed=std::max(stats_.maxAngularSpeed,length(b.angularVelocity));

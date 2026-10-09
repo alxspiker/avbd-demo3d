@@ -1,22 +1,46 @@
-# Physics validation and limits
+# Physics validation and limitations — October 9, 2026
 
-## Baseline verification (Linux / GCC / Release, October 9, 2026)
+Tests were run with local CMake Release and a separate sanitizer build. `ctest --output-on-failure` reported both test suites passed, in both configurations. The core test executable has **14 checks**; the advancement suite currently has **18 checks**.
 
-Executed `ctest` and `avbd3d_tests`: **14 pass, 0 fail**.
+## Specific user-reported concerns
 
-Covered: free fall, quaternion rotation, resting contact, three- and eight-box stacks, tilted impacts, head-on momentum symmetry, ground friction braking, off-center contact torque, rotated OBB contact, frictionless sliding, deep initial overlap recovery, 240 Hz stepping, and 64-body stress stability. Tests have finite-run, finite-tolerance expectations and do not prove correct behaviour for arbitrary configurations.
+### Blocks apparently balanced on corners
 
-The isolated `avbd3d_limitations` program reproduces **high-speed tunnelling**: a small 0.3-unit box moving at 400 units/s passes a thin 0.1-unit wall in one 1/120-second step without generating contacts. This is an explicitly documented non-blocking failure.
+An isolated 1 × 1 × 1 box was dropped onto a plane from six distinct initial rotations (0.15, 0.35, 0.55, 0.75, 0.95 and 1.15 radians) with nonzero friction. In each 1,000-step run, the final height was within 0.02 of the 0.5-unit expected face-down resting height, and the most-upward-facing body axis was aligned to within 0.01 of vertical. All six passed.
 
-Benchmarks depend on hardware and build settings. Previous measurement: 1,000 stacked boxes, 120 steps, 53.4 ms/step on the original test environment. No claim of real-time performance at this scale.
+In the 84-body crowded scene, some cubes remain tilted because their neighbours form mutual supports. That may be physically legitimate; this test does **not** prove all pile contacts are correct. No artificial face snapping is applied. The revised Stage 1 video covers the complete 12 simulated seconds, rather than a short early interval.
 
-## Required before a game engine
+### Spheres apparently passing through the wall
 
-1. Verify complete AVBD 6-DOF equations including rotational geometric stiffness and force/correction signs against the paper and reference.
-2. Add CCD and restitution, tests for moving targets, high-speed and extreme aspect ratios, static/dynamic friction convergence, deterministic replay.
-3. Expand primitives/constraints and independently verify momentum/energy where applicable.
-4. Optimize broadphase, solver, cache, sleeping/islands, parallelization, and eventually GPU after correctness is established.
+The wall is 0.09 units thick and 22 fast spheres (radius 0.28 units, 30 units/s) approach from both sides. Every sphere's signed distance from the wall was checked at **every physics step** for 1,436 steps, not just the video sample frames. The closest recorded center was approximately **0.3284 units** from the center plane. The expected nonpenetrating center distance is 0.045 + 0.28 = **0.325** units. No sphere crossed in the tested scenario. The video is a software depth-sorted 3D projection, not a pixel-accurate renderer, so misleading overlaps are possible.
 
-## Builds
+**Do not extrapolate this to general continuous collision detection.** The optional adaptive substep budget can be exceeded in other high-speed cases. The `avbd3d_limitations` executable intentionally reproduces a tunnel case with adaptive substepping disabled.
 
-This source-only repository intentionally contains no `.github/workflows` files. Manual build commands are in the root README. Do not represent platform builds as verified until run on those platforms.
+### Pendulum losing its wrecking ball
+
+The original demonstration had a deliberate break threshold of 200 force units at the final joint. This generated a fracture event prematurely for the desired wrecking-ball demonstration. The revised Stage 4 makes all 13 links unbreakable, records all links active through the 360-frame trace, and the moving ball displaces at least 17 blocks in the wall by the end. Peak link-length deviation in the recorded trajectory is under 0.005 units (relative to initial link lengths). Breakable-joint behaviour is still separately verified by a regression test.
+
+## Regression coverage
+
+- **14 baseline checks:** gravitational freefall, free quaternion rotation, single resting box, three/eight-box stacks, tilted box, head-on momentum, ground friction, off-centre torque, rotated box contact, frictionless sliding, overlap recovery, high-frequency fixed timestep, 64-body stability.
+- **18 advancement checks:** bounce detection and rebound, opposing impact velocities, adaptive substep engagement, fast projectile block, sphere-floor contact, sphere-sphere blocking/bounce, sphere-box block, joint stretch bound and finite state, intentional fracture, resting sleep and impact wake, 22 fast spheres remaining outside the thin wall at *every tick*, valid wall clearance, and six isolated tilted-box resting cases.
+
+These deterministic finite-duration scenarios cannot certify arbitrary contact, material, constraint or performance behaviour. Visual demonstration is additional evidence, not a replacement for objective physics tests.
+
+## Benchmarks
+
+- Earlier 1,000-box stacked baseline: approximately **53 ms/step** (specific previous CPU/workload, not engine performance guarantee).
+- Local resting-pile benchmark for **144 dynamic boxes**: approximately **6.43 ms/step without sleeping** vs **1.21 ms/step with sleeping**, after warm-up, on this testing runtime. Differences in body count, hardware, settings, and contact state prohibit direct comparisons with AVBD research's GPU results.
+- No million-body real-time claim. The solver is primarily CPU, single-threaded and sequential per-body; substantial structural redesign is required to reach GPU-scale simulation.
+
+## Remaining engineering priorities
+
+1. Validate full AVBD 3D rotational objective, manifold geometry, and geometric stiffness against the paper's equations and numerical derivatives.
+2. Add genuinely swept CCD with robust contact time-of-impact solving, not just fixed substeps.
+3. Test friction cones, restitution energy, near-singular inertia, extreme mass ratios and dynamic joints via quantitative invariants.
+4. Introduce collision island grouping and graph colouring, sleeping islands, broadphase profiling, batched memory layout, SIMD and parallel/GPU execution after correctness.
+5. Build consistent cross-platform integration interfaces; expand shape and joint APIs and add independent visual validation.
+
+## Build policy
+
+The personal GitHub repository intentionally contains no `.github/workflows` or compiled binaries. Builds/tests are local or can be run manually; organization-owned CI can be added later when requested.

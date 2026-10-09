@@ -1,12 +1,12 @@
 # AVBD Demo 3D — experimental physics core
 
-A **headless, dependency-free C++17** implementation of 3D rigid-box contacts based on the ideas of Augmented Vertex Block Descent (AVBD). This project replaces the earlier SDL/OpenGL/ImGui demo with a smaller physics library, reproducible tests, and a 96-box sky-drop capture scene.
+An independent, **headless C++17** experimental 3D physics engine based on the ideas of [Augmented Vertex Block Descent (AVBD)](https://graphics.cs.utah.edu/research/projects/avbd/) and Chris Giles' educational [2D AVBD demo](https://github.com/savant117/avbd-demo2d). The old SDL/OpenGL prototype was replaced with a testable physics library.
 
-**Status:** experimental proof of concept, not a finished game physics engine, not an exact reproduction of the full SIGGRAPH 2025 AVBD algorithm, and not GPU-accelerated.
+**Status:** early-stage engine, **not a complete implementation of the SIGGRAPH AVBD paper** and not comparable yet to the research project's GPU throughput. Do not mistake the rendered videos for correctness proofs. A reproducible, measured core is the priority.
 
-## Build and test — no GitHub Actions required
+## Manual build — no GitHub Actions needed
 
-Requires CMake 3.16+ and a C++17 compiler (MSVC, GCC, or Clang).
+Requires a C++17 compiler and CMake 3.16+:
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -14,59 +14,63 @@ cmake --build build --config Release --parallel
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-On Windows, executables are commonly in `build/Release/`. On Linux/macOS, they are commonly in `build/`.
+Windows often puts executables in `build/Release/`; Linux/macOS usually put them directly in `build/`.
 
-Programs:
+### Executables
 
-- `avbd3d_tests`: 14 automated baseline physics tests.
-- `avbd3d_demo [steps]`: a five-box stack simulation (default 360 steps).
-- `avbd3d_stress [side] [steps]`: `side³` stacked boxes (default 10³ boxes, 120 steps).
-- `avbd3d_sky_capture`: 96 boxes dropping onto a floor, writes JSON frames to standard output.
-- `avbd3d_limitations`: demonstrates known high-speed tunnelling. **This failure is expected**, not part of the passing test suite.
+| Program | Purpose |
+| --- | --- |
+| `avbd3d_tests` | 14 core physics regressions |
+| `avbd3d_advancement` | 18 additional checks for restitution, shapes, substeps, joints, sleeping, scene-specific problems |
+| `avbd3d_demo` | Small stack simulation |
+| `avbd3d_stress` | Configurable box stress scene |
+| `avbd3d_benchmark` | Resting-pile speed measurement with sleeping enabled/disabled |
+| `avbd3d_stages 1..5` | Emit actual 3D simulation frame data for each development stage as JSON |
+| `avbd3d_sky_capture` | Original 96-box sky-drop data |
+| `avbd3d_limitations` | Intentionally reproduces a *known* failure if adaptive substepping is disabled |
 
-To capture the sky-drop scene, run from the repo root (adapt binary path on Windows):
+Capture/render the stage videos (Pillow and ffmpeg required for *rendering only*, not for the physics engine):
 
 ```sh
-./build/avbd3d_sky_capture > sky_trace.json
-```
-
-Optional MP4 rendering (requires Python 3, Pillow and an `ffmpeg` executable in PATH):
-
-```sh
+./build/avbd3d_stages 4 > stage4.json
 python -m pip install Pillow
-python tools/render_sky.py sky_trace.json sky_drop.mp4
+python tools/render_stages.py stage4.json stage4.mp4
 ```
 
-The 360 captured frames represent **6 seconds of simulated time** at 60 captured frames/second (the solver steps at 120 Hz). The renderer outputs **12 seconds of video at 30 fps**, i.e. half-speed playback so collisions are easier to inspect.
+### Development stages
 
-## Implemented
+1. **Elastic contacts:** 84 boxes, restitution, impact-induced rotation, persistent frictional contact.
+2. **Fast projectiles:** 22 spheres strike a 0.09-unit-thick wall using optional adaptive discrete substeps. Regressions check every simulation tick that no projectile crosses the wall in this scenario. **This is not swept/continuous CCD.**
+3. **Sphere demolition:** A 132-brick wall struck by two moving spheres, testing mixed sphere–box and box–box contacts.
+4. **Attached wrecking ball:** 13 distance links hold a ball while it strikes a stack. All links are unbreakable **in this demonstration**. Fracture is still supported and separately unit-tested.
+5. **Sleeping and waking:** An initially resting body group sleeps and wakes when struck by a moving sphere.
 
-- Full 3D position and quaternion orientation with mass and 3D box inertia.
-- Fixed-step inertial prediction and per-body 6×6 primal solver with augmented contact dual variables.
-- OBB SAT collision detection (15 axes), face clipping and edge–edge closest points.
-- Persistent manifolds up to four contacts per pair with normal and two tangential friction directions.
-- Sweep-and-prune broadphase (single-threaded); headless simulation, deterministic scenarios and tests.
+All stage recordings use 360 recorded frames produced by advancing the C++ solver four steps per frame, corresponding to about 12 seconds of simulation at the default 120 Hz solver rate. The MP4 renderer outputs 12 seconds at 24 fps from this saved trace; frame rendering never invents physics trajectories.
 
-## Known limitations — do not treat these as solved
+## Implemented so far
 
-- **No continuous collision detection:** fast small objects can pass through thin walls.
-- **No restitution:** collisions mostly stop instead of bouncing.
-- No general joints, springs, motors, meshes, convex hulls, sleeping, GPU, or multithreading.
-- The exact full AVBD 3D rotational geometric Hessian is not implemented; a positive-definite Gauss–Newton approximation is used.
-- Contact manifolds, friction and high-energy impacts still need more validation.
-- 1,000 stacked dynamic boxes took approximately **53 ms/step** on the original test machine (24 solver iterations + 20 post-stabilization); too slow for a 60 Hz game under that workload.
-- There is **no graphical/editor application** in this revision. The `avbd3d_sky_capture` executable emits recorded simulation data, not a live viewer.
+- Rigid box and sphere bodies with full 3D translation, quaternions, world inertia and angular response.
+- AVBD-inspired per-body six-degree-of-freedom iterative primal solves, dual variables, penalty ramping and post-stabilization.
+- 15-axis OBB SAT, clipped face contacts, box edges, sphere–sphere and sphere–box contacts.
+- Contact manifold persistence, normal and paired tangential rows, approximate Coulomb disc projection, friction.
+- Restitution impulses for newly closing contacts (a deliberately **hybrid extension**, not part of the 2D AVBD reference).
+- Sweep-and-prune broadphase; configurable adaptive **discrete** substepping to reduce tunnelling.
+- Distance joints, configurable fracture force and collision filtering between adjacent linked bodies.
+- Optional resting-body sleeping and impact wakeup.
+- Automated physics tests, stress scenes, measurements and offline video capture.
 
-See [docs/VALIDATION.md](docs/VALIDATION.md) for test scope and limitations.
+## Important limitations and observed behaviour
 
-## References and credits
+- **Exact swept continuous collision detection is still missing.** Very fast/thin contacts can tunnel if a motion exceeds the substep budget; adaptive substeps are not a universal guarantee.
+- **Joint constraints are limited:** no motor/hinge/ball-socket-specific joints, ragdoll or articulation islands yet.
+- No collision meshes, convex hulls, capsules, continuous shape casts, materials API, game-engine integration, multithreading or GPU implementation.
+- Full rigorous AVBD rotational geometric Hessians have not been derived and validated against the paper; the current six-DOF solve uses a positive-definite approximation.
+- Contact/friction energy, extreme mass ratios, high-speed and persistent pile behaviour require more extensive validation. A leaning box in a pile can legitimately be supported by adjacent boxes; isolated tipped boxes are tested to settle flat. We do **not** snap orientations to be axis-aligned.
+- Sleeping can speed up *already resting* piles but does not speed up sustained chaotic collisions. Demonstration benchmarks depend strongly on hardware and workload.
+- No live GUI/editor; captured JSON and rendered MP4s are diagnostic tools.
 
-- [AVBD SIGGRAPH 2025 research](https://graphics.cs.utah.edu/research/projects/avbd/) — Chris Giles, Elie Diaz, Cem Yuksel.
-- [Original educational AVBD 2D demo](https://github.com/savant117/avbd-demo2d) — Chris Giles.
-- [Educational AVBD 3D reference](https://github.com/savant117/avbd-demo3d).
+See [docs/VALIDATION.md](docs/VALIDATION.md) for test specifics, honest failure modes and benchmark scope. No workflow is installed or required on the owner's personal GitHub repository.
 
-Independent implementation inspired by these works; not a verbatim port. MIT licensed; see [LICENSE](LICENSE).
+## Credits and license
 
-## Repository history
-
-This commit deliberately replaces the former graphical demo and its SDL/ImGui submodules. Previous versions remain accessible in Git history. No GitHub Actions are configured in this personal repository. Build locally or run the CMake commands in an organization-owned CI project if desired.
+Educational lineage: Chris Giles and `savant117/avbd-demo2d`; AVBD research by Chris Giles, Elie Diaz and Cem Yuksel. The engine is an independent experimental implementation rather than the official research code. MIT license; see [LICENSE](LICENSE).
