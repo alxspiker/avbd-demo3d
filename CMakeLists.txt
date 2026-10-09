@@ -82,3 +82,7 @@ add_executable(avbd3d_layout_capture src/layout_capture.cpp)
 target_link_libraries(avbd3d_layout_capture PRIVATE avbd3d)
 add_executable(avbd3d_layout_benchmark src/layout_benchmark.cpp)
 target_link_libraries(avbd3d_layout_benchmark PRIVATE avbd3d)
+
+# Kaggle: record *all* engine body positions as density images per real simulation frame.
+add_executable(avbd3d_million_video_capture src/million_video_capture.cpp)
+target_link_libraries(avbd3d_million_video_capture PRIVATE avbd3d)

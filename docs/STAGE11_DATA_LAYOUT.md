@@ -55,3 +55,35 @@ The Kaggle notebook `notebooks/avbd_stage11_kaggle.ipynb` clones the latest `mai
 1. Move collision prediction bounds to contiguous arrays so the narrowphase and spatial index read them directly, reducing AoS↔SoA copying.
 2. Replace per-body map/manifold and contact-memory allocation patterns with compact persistent contact pools, keeping deterministic ordering.
 3. Benchmark contact-rich scenes at 1,000, 5,000, and 10,000 bodies on Kaggle CPU, then design comparable CUDA collision candidate generation and compare exact candidate sets to the CPU reference.
+
+### Million-body video in Kaggle
+
+The Stage 11 Kaggle notebook now produces `stage11-million-bodies.mp4` from
+`avbd3d_million_video_capture` and `tools/render_million_video.py`. This is a
+**real CPU simulation with one million `World::addBox` bodies**. Each of its
+48 recorded frames is computed from `World::body` positions following genuine
+`World::step` calls (141 solver steps after the initial frame). All bodies are
+included in a three-channel fixed-camera density projection: collocated screen
+pixels aggregate their population rather than skipping bodies. A per-frame
+uint16 raster checksum must equal the declared body count.
+
+This intentionally records **only gravity/free-flight without any contacts**;
+it proves a sparse-million simulation, *not* a real-time million-contact engine.
+The recorder refuses to produce a successful trace if the conservative
+zero-contact spatial certificate fails, a camera frame crops even one body,
+or any projected state is non-finite. The renderer independently checks the
+per-frame projected population and certification stats. MP4 playback at 12 FPS
+is visual playback and does not claim realtime simulation performance.
+
+Running manually after a Release build:
+
+```bash
+./build/avbd3d_million_video_capture 1000000 48 3 capture
+python tools/render_million_video.py capture stage11-million-bodies.mp4 --fps 12
+```
+
+The raw intermediate `density_####.bin` rasters store uint16 counts in
+row-major 1280×720×3 depth-band order; `physics_stats.jsonl` records the
+measured simulated time, body count, visible count, contacts and certificate.
+The notebook deletes the large intermediate rasters *after* encoding and
+preserves the stats, MP4 and preview images.
