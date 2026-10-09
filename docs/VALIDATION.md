@@ -47,4 +47,8 @@ The personal GitHub repository intentionally contains no `.github/workflows` or 
 
 ## Milestones 6/7 update
 
-New optional translation CCD and colored multithreaded solver tested in 19 assertions; see [CCD_AND_PARALLEL.md](CCD_AND_PARALLEL.md) for boundaries, measurements and reproduction. This supersedes the earlier statements on this page that no swept CCD or CPU parallelism existed. Full rotating rigid CCD and GPU scaling are still missing.
+New optional translation CCD and colored multithreaded solver tested in 19 assertions; see [CCD_AND_PARALLEL.md](CCD_AND_PARALLEL.md) for boundaries, measurements and reproduction. This supersedes the earlier statements on this page that no swept CCD or CPU parallelism existed. Exact general rotating/accelerating-body CCD and GPU scaling are still missing; an experimental constant-angular-velocity conservative advancement path is now exercised by Stage 8.
+
+## Stage 8 reviewer follow-up
+
+Stage 8 now includes a side-by-side CCD-on/off comparison, eight regression scenarios for measured collision impulses, a non-contacting rotating near-miss, and fast rotating thin-wall sphere tests. The initial 16-sphere ring video was not a meaningful full-duration demonstration: scattered particles and last-substep contact counters obscured the impact. This comparison uses cumulative **impact impulses** and measured velocities, and its replay is slowed explicitly without modifying physical trajectories. Rotational CCD iteration exhaustion now contributes to `ccdUnresolved` instead of being silently treated as a miss. Finite search limits and a constant angular velocity model remain substantial limitations.

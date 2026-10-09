@@ -31,6 +31,8 @@ Windows often puts executables in `build/Release/`; Linux/macOS usually put them
 | `avbd3d_ccd_parallel_tests` | 19 additional CCD/parallel assertions |
 | `avbd3d_parallel_benchmark [side] [layers] [steps]` | Serial vs colored CPU speed in the same pile scene |
 | `avbd3d_milestones ccd\|parallel` | Reproduce new CCD comparison or 406-body parallel trace |
+| `avbd3d_rotational_ccd_tests` | Rotating-contact assertions, including CCD-on/off impulse comparisons |
+| `avbd3d_rotational_capture` | Stage 8 side-by-side, measured sphere/bar motion capture |
 
 Capture/render the stage videos (Pillow and ffmpeg required for *rendering only*, not for the physics engine):
 
@@ -49,6 +51,7 @@ python tools/render_stages.py stage4.json stage4.mp4
 5. **Sleeping and waking:** An initially resting body group sleeps and wakes when struck by a moving sphere.
 6. **Linear-translation CCD:** Event-driven swept sphere–sphere, sphere–OBB and OBB–OBB TOI, with a side-by-side discrete comparison. Not rotational CCD.
 7. **Parallel CPU solver:** Graph-colored independent rigid-body updates using OpenMP when available; 405 blocks and one sphere in the stage video.
+8. **Rotational CCD:** Eight controlled fast-spinning-bar contacts, side by side with CCD disabled. CCD produces a measured sphere impulse where the discrete path misses.
 
 Stages 1–5 use 360 recorded frames produced by advancing the C++ solver four steps per frame, corresponding to about 12 seconds of simulation at the default 120 Hz solver rate. The MP4 renderer outputs 12 seconds at 24 fps from this saved trace; frame rendering never invents physics trajectories.
 
@@ -71,7 +74,7 @@ The first video compares CCD disabled and enabled in separate recorded C++ world
 - 15-axis OBB SAT, clipped face contacts, box edges, sphere–sphere and sphere–box contacts.
 - Contact manifold persistence, normal and paired tangential rows, approximate Coulomb disc projection, friction.
 - Restitution impulses for newly closing contacts (a deliberately **hybrid extension**, not part of the 2D AVBD reference).
-- Sweep-and-prune broadphase; optional adaptive **discrete** substepping and optional event-driven **translational** CCD for spheres and oriented boxes.
+- Sweep-and-prune broadphase; optional adaptive **discrete** substepping, event-driven translation CCD for spheres and oriented boxes, and experimental rotational conservative advancement.
 - Distance joints, configurable fracture force and collision filtering between adjacent linked bodies.
 - Optional resting-body sleeping and impact wakeup.
 - Graph-colored body solver with optional OpenMP parallel execution and serial fallback.
@@ -79,7 +82,7 @@ The first video compares CCD disabled and enabled in separate recorded C++ world
 
 ## Important limitations and observed behaviour
 
-- **Full rotational/accelerating-body CCD remains missing.** Translation-only TOI is implemented, but rotating box sweeps are skipped and reported in statistics. TOI event budgets can be exhausted and are reported; there is no universal no-tunnelling guarantee.
+- **Robust general rotational/accelerating-body CCD remains missing.** Rotating boxes now use approximate constant-angular-velocity conservative advancement. This is not an exact continuous six-degree-of-freedom trajectory. Exhausting rotational-search iterations or the global TOI budget is reported; the discrete fallback still risks tunnelling.
 - **Joint constraints are limited:** no motor/hinge/ball-socket-specific joints, ragdoll or articulation islands yet.
 - No collision meshes, convex hulls, capsules, general rotational shape casts, materials API, game-engine integration, or GPU implementation.
 - Full rigorous AVBD rotational geometric Hessians have not been derived and validated against the paper; the current six-DOF solve uses a positive-definite approximation.
@@ -92,3 +95,16 @@ See [docs/VALIDATION.md](docs/VALIDATION.md) and [docs/CCD_AND_PARALLEL.md](docs
 ## Credits and license
 
 Educational lineage: Chris Giles and `savant117/avbd-demo2d`; AVBD research by Chris Giles, Elie Diaz and Cem Yuksel. The engine is an independent experimental implementation rather than the official research code. MIT license; see [LICENSE](LICENSE).
+
+### Stage 8 — Rotating-body CCD (reviewed comparison)
+
+`avbd3d_rotational_capture` records **eight separate rod-versus-sphere experiments** twice, with identical initial states and only CCD enabled/disabled. All eight produced an impact impulse and sphere displacement with CCD enabled, while the discrete run missed the first impact. Both positive and negative spins are tested. This verifies these specific circumstances, not arbitrary rotating bodies.
+
+```sh
+./build/avbd3d_rotational_capture > rotational_trace.json
+python tools/render_rotational.py rotational_trace.json stage8-reviewed.mp4
+```
+
+The 12-second video is a **6× slowed diagnostic replay**: every actual 120 Hz physics pose is held for six rendered 24-fps frames. There are no scripted contact impulses or fabricated motion; the initial scene is reset between the eight controlled experiments. The measured sphere speed, impulse count, and TOI events appear in each panel. The final display frame's contact count is **not** used as a proxy for impacts occurring earlier in the tick.
+
+The renderer produces an MP4 that is played separately; there is no hosted interactive graphics application. See `docs/CCD_AND_PARALLEL.md` for assumptions and limitations.

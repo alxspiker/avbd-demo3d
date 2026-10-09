@@ -321,6 +321,56 @@ static double sweepBoxBox(const Body& a,const Body& b,Vec3 va,Vec3 vb,double dt,
     for(int i=0;i<3;i++)for(int j=0;j<3;j++)if(!axis(cross(A.axis[i],B.axis[j])))return NO_HIT;
     return separated && enter>=0 && enter<=dt && enter<=exit ? enter:NO_HIT;
 }
+// Conservative advancement for constant linear/angular velocities. Unlike the
+// exact translational sweeps, this uses a Lipschitz bound on separation and
+// stops at the contact margin. It does not model angular acceleration.
+static double rotationalSeparation(const Body& a,const Body& b){
+    if(a.shape==Shape::Sphere&&b.shape==Shape::Sphere)
+        return length(a.p-b.p)-a.half.x-b.half.x;
+    if(a.shape==Shape::Sphere||b.shape==Shape::Sphere){
+        const Body& sphere=a.shape==Shape::Sphere?a:b;
+        const Body& box=a.shape==Shape::Box?a:b;
+        const Vec3 localP=box.q.conjugate().rotate(sphere.p-box.p);
+        return std::sqrt(boxPointDistance2(localP,box.half))-sphere.half.x;
+    }
+    const OBB A=obb(a),B=obb(b);
+    const Vec3 d=B.c-A.c;
+    double gap=-std::numeric_limits<double>::infinity();
+    auto test=[&](Vec3 axis){
+        double len=length(axis);
+        if(len<1e-8)return;
+        axis=axis/len;
+        gap=std::max(gap,std::abs(dot(d,axis))-radius(A,axis)-radius(B,axis));
+    };
+    for(int i=0;i<3;i++){test(A.axis[i]);test(B.axis[i]);}
+    for(int i=0;i<3;i++)for(int j=0;j<3;j++)test(cross(A.axis[i],B.axis[j]));
+    return gap;
+}
+static double sweepRotating(const Body& a,const Body& b,Vec3 va,Vec3 vb,double dt,double margin,bool& exhausted){
+    exhausted=false;
+    // Bounding radius times angular speed bounds each body's surface motion.
+    const double ra=length(a.half),rb=length(b.half);
+    const double speed=length(va-vb)+length(a.angularVelocity)*ra+length(b.angularVelocity)*rb;
+    if(speed<1e-12)return NO_HIT;
+    if(rotationalSeparation(a,b)<=margin)return NO_HIT;
+    double t=0;
+    for(int iteration=0;iteration<512;iteration++){
+        Body A=a,B=b;
+        A.p+=va*t;B.p+=vb*t;
+        A.q=(Quat::exp(a.angularVelocity*t)*a.q).unit();
+        B.q=(Quat::exp(b.angularVelocity*t)*b.q).unit();
+        const double separation=rotationalSeparation(A,B);
+        if(separation<=margin+1e-8)return t;
+        // A conservative time step: no surface can close faster than speed.
+        const double step=(separation-margin)/speed;
+        if(step<1e-12)return t;
+        t+=step;
+        if(t>dt)return NO_HIT;
+    }
+    // Exhausting the conservative-advancement budget does NOT certify a miss.
+    exhausted=true;
+    return NO_HIT;
+}
 static Vec3 ccdVelocity(const Body& b,Vec3 gravity,double dt){
     return b.dynamic()&&!b.sleeping?b.velocity+gravity*dt:Vec3{};
 }
@@ -346,8 +396,13 @@ void World::stepCCD(){
                 Vec3 ext;
                 if(b.shape==Shape::Sphere)ext=b.half;
                 else{
-                    OBB o=obb(b);
-                    for(int k=0;k<3;k++)ext+=Vec3{std::abs(o.axis[k].x),std::abs(o.axis[k].y),std::abs(o.axis[k].z)}*o.h[k];
+                    if(length2(b.angularVelocity)>1e-12){
+                        const double radius=length(b.half);
+                        ext={radius,radius,radius}; // Swept rotational bounding sphere
+                    }else{
+                        OBB o=obb(b);
+                        for(int k=0;k<3;k++)ext+=Vec3{std::abs(o.axis[k].x),std::abs(o.axis[k].y),std::abs(o.axis[k].z)}*o.h[k];
+                    }
                 }
                 const Vec3 v=ccdVelocity(b,settings.gravity,remaining);
                 vel[b.id]=v;
@@ -369,17 +424,26 @@ void World::stepCCD(){
                 if(linked.count({ia,ib}))continue;
                 if(maxPos[ia].y+settings.contactMargin<minPos[ib].y||maxPos[ib].y+settings.contactMargin<minPos[ia].y||
                    maxPos[ia].z+settings.contactMargin<minPos[ib].z||maxPos[ib].z+settings.contactMargin<minPos[ia].z)continue;
-                // A rotating OBB requires angular continuous SAT, not this linear sweep.
-                // Do not claim its TOI is exact. It is still advanced by the normal solver.
-                if((a.shape==Shape::Box&&length2(a.angularVelocity)>1e-12)||
-                   (b.shape==Shape::Box&&length2(b.angularVelocity)>1e-12)){++aggregate.ccdUnsupportedRotation;continue;}
+                const bool rotating=(a.shape==Shape::Box&&length2(a.angularVelocity)>1e-12)||
+                                    (b.shape==Shape::Box&&length2(b.angularVelocity)>1e-12);
                 ++aggregate.ccdCandidates;
                 double hit=NO_HIT;
-                if(a.shape==Shape::Sphere && b.shape==Shape::Sphere)hit=sweepSphereSphere(a,b,vel[ia],vel[ib],remaining,settings.contactMargin);
+                if(rotating){
+                    bool exhausted=false;
+                    hit=sweepRotating(a,b,vel[ia],vel[ib],remaining,settings.contactMargin,exhausted);
+                    if(exhausted)++aggregate.ccdUnresolved;
+                    // Finite iteration budgets and angular acceleration still
+                    // preclude a universal no-tunnelling guarantee.
+                }
+                else if(a.shape==Shape::Sphere && b.shape==Shape::Sphere)hit=sweepSphereSphere(a,b,vel[ia],vel[ib],remaining,settings.contactMargin);
                 else if(a.shape==Shape::Sphere)hit=sweepSphereBox(a,b,vel[ia],vel[ib],remaining,settings.contactMargin);
                 else if(b.shape==Shape::Sphere)hit=sweepSphereBox(b,a,vel[ib],vel[ia],remaining,settings.contactMargin);
                 else hit=sweepBoxBox(a,b,vel[ia],vel[ib],remaining,settings.contactMargin);
-                if(hit<first){first=hit;firstSpeed=length(vel[ia]-vel[ib]);}
+                if(hit<first){
+                    first=hit;
+                    firstSpeed=length(vel[ia]-vel[ib]);
+                    if(rotating)firstSpeed+=length(a.angularVelocity)*length(a.half)+length(b.angularVelocity)*length(b.half);
+                }
             }
             double advance=remaining;
             if(std::isfinite(first) && first<remaining){
