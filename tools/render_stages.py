@@ -65,11 +65,11 @@ try:
     vv=[project(add(p,rot([x*size[0]/2,y*size[1]/2,z*size[2]/2],q))) for x,y,z in CUBE_VERTS]
     for face in FACES:
      pts=[vv[i] for i in face]
-     a,b,c=pts[:3]
-     area=(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0])
-     if area>0:continue
      point=[add(p,rot([CUBE_VERTS[i][j]*size[j]/2 for j in range(3)],q)) for i in face]
-     n=norm(cross(sub(point[1],point[0]),sub(point[2],point[0])))
+     # FACES are inward-wound. Flip their normals and cull in world space.
+     inward=cross(sub(point[1],point[0]),sub(point[2],point[0]))
+     n=norm([-v for v in inward])
+     if dot(n,sub(cam,point[0]))<=0:continue
      brightness=.56+.38*max(0,dot(n,lightdir))
      entities.append((sum(pt[2] for pt in pts)/len(pts),('face',[v[:2] for v in pts],light(base,brightness))))
   # Draw projected distance-joint graph underneath foreground geometry.
