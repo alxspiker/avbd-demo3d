@@ -79,7 +79,7 @@ int main(){
   int s=w.addSphere({-5,0,0},.2,1);
   w.body(s).velocity={1400,0,0};
   w.step();
-  check(w.statistics().ccdUnsupportedRotation>0,"rotating box TOI limitation is explicit",w.statistics().ccdUnsupportedRotation);
+  check(w.statistics().ccdEvents>0,"rotating box conservative TOI registered",w.statistics().ccdEvents);
  }
  {
   World w;w.settings.gravity={};w.settings.enableCCD=true;
