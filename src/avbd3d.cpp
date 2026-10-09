@@ -829,9 +829,9 @@ void World::stepDiscrete(){
                 c.impactSpeed=std::min(0.0,dot(vA-vB,c.n));
             }
         }
-        if(settings.enablePersistentManifoldStorage && old!=manifolds_.end()){
-            // Reuse the ordered-map node and its contact allocation. The old
-            // witnesses have already been read for warmstarting above.
+        if(old!=manifolds_.end()){
+            // Preserve the ordered-map node for pairs that persist across frames.
+            // The previous witnesses have already been used for warmstarting.
             auto node=manifolds_.extract(old);
             node.mapped().contacts.clear();
             node.mapped().contacts.swap(contacts);

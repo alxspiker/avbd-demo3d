@@ -90,3 +90,7 @@ target_link_libraries(avbd3d_million_video_capture PRIVATE avbd3d)
 add_executable(avbd3d_persistent_contacts tests/persistent_contacts.cpp)
 target_link_libraries(avbd3d_persistent_contacts PRIVATE avbd3d)
 add_test(NAME persistent_contacts COMMAND avbd3d_persistent_contacts)
+
+# Stage 12: reproducible dense-contact benchmark of the single supported path.
+add_executable(avbd3d_contact_benchmark src/benchmark_contacts.cpp)
+target_link_libraries(avbd3d_contact_benchmark PRIVATE avbd3d)

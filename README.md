@@ -178,3 +178,17 @@ python tools/render_freeflight.py stage10-trace.json stage10-sparse-physics.mp4
 ```
 
 No GitHub Actions, paid APIs, or hidden GPU fallbacks. The original solver is still the default; all experimental optimizations are opt-in.
+
+### Stage 12 — fixed persistent manifold storage (no toggle)
+
+Persistent contact-pair **map nodes** are now reused unconditionally during
+`World::step`. The experimental `enablePersistentManifoldStorage` flag has been
+removed; there is only one contact-storage path. We benchmarked and rejected
+more complex vector-buffer reuse schemes because they regressed on local
+dense-contact workloads. The updated regression checks original solver fixture
+values, serial/parallel determinism, and contact expiration/recreation.
+
+See [Stage 12 methodology](docs/STAGE12_PERSISTENT_CONTACTS.md). To run the
+reproducible dense-contact benchmark use
+`./build/avbd3d_contact_benchmark 5 100`. This does **not** establish
+million-body interacting physics or a general solver speedup.

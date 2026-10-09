@@ -99,7 +99,6 @@ struct Settings {
     bool enableIslandSolver=false; // Parallel disconnected constraint islands, with graph-color fallback
     bool enableCertifiedFreeFlight=false; // Stage 10: exact discrete-step separation certificate, skip zero-contact AVBD solver
     bool enableDataOrientedPredictor=false; // Stage 11: packed SoA translation predictor in real World::step; AoS remains authoritative
-    bool enablePersistentManifoldStorage=false; // Stage 12: recycle contact manifold nodes and vectors across steps
     bool enableFlatFreeFlightCertificate=false; // Stage 11: reusable contiguous open-addressed isolation grid
     double freeFlightCellSize=2.0; // Positive world-space voxel width for the conservative certificate
     int parallelThreads=0; // 0 = OpenMP default
