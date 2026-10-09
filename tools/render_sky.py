@@ -54,14 +54,19 @@ try:
             size = data['boxes'][bi]['size']
             pos, q = body[:3], body[3:]
             verts = []
+            world_verts = []
             for x in [-1, 1]:
                 for y in [-1, 1]:
                     for z in [-1, 1]:
                         v = rotate([x*size[0]/2, y*size[1]/2, z*size[2]/2], q)
-                        verts.append(proj([pos[j]+v[j] for j in range(3)]))
+                        wp = [pos[j]+v[j] for j in range(3)]
+                        world_verts.append(wp)
+                        verts.append(proj(wp))
             for face in faces:
                 p = [verts[j] for j in face]
-                if cross(sub(p[1], p[0]), sub(p[2], p[0]))[2] >= 0: continue
+                wp = [world_verts[j] for j in face]
+                outward = cross(sub(wp[1], wp[0]), sub(wp[2], wp[0]))
+                if dot(outward, sub(cam, wp[0])) <= 0: continue
                 visible.append((sum(v[2] for v in p)/4, bi, [(v[0], v[1]) for v in p]))
         visible.sort(reverse=True)
         for _, bi, p in visible:
