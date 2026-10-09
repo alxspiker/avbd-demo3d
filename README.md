@@ -42,6 +42,11 @@ python -m pip install Pillow
 python tools/render_stages.py stage4.json stage4.mp4
 ```
 
+| `avbd3d_freeflight_tests` | Stage 10 certified no-contact parity, collision fallback and configuration tests |
+| `avbd3d_million_benchmark [n] [steps] [certified|bvh]` | Actual engine 10K/100K/1M sparse CPU workload |
+| `avbd3d_soa_reference [n] [steps]` | Isolated contiguous-array translation microbenchmark, not full physics |
+| `avbd3d_freeflight_capture` | Capture a real 10K-body / 1,250-visible-sample falling-field video |
+
 ### Development stages
 
 1. **Elastic contacts:** 84 boxes, restitution, impact-induced rotation, persistent frictional contact.
@@ -52,6 +57,8 @@ python tools/render_stages.py stage4.json stage4.mp4
 6. **Linear-translation CCD:** Event-driven swept sphere–sphere, sphere–OBB and OBB–OBB TOI, with a side-by-side discrete comparison. Not rotational CCD.
 7. **Parallel CPU solver:** Graph-colored independent rigid-body updates using OpenMP when available; 405 blocks and one sphere in the stage video.
 8. **Rotational CCD:** Eight controlled fast-spinning-bar contacts, side by side with CCD disabled. CCD produces a measured sphere impulse where the discrete path misses.
+9. **CPU scaling:** 3D BVH broadphase, parallel contact detection, independent collision-island scheduling.
+10. **Million-body CPU capacity / GPU probe:** Optional certified zero-contact optimization can integrate one million isolated bodies at ~0.56 seconds/step in this container. CPU/GPU SoA translation kernels and a Kaggle notebook are provided; these are **not full AVBD physics GPU implementations**.
 
 Stages 1–5 use 360 recorded frames produced by advancing the C++ solver four steps per frame, corresponding to about 12 seconds of simulation at the default 120 Hz solver rate. The MP4 renderer outputs 12 seconds at 24 fps from this saved trace; frame rendering never invents physics trajectories.
 
@@ -143,3 +150,16 @@ python tools/render_scaling.py stage9.json stage9.mp4
 `stage9.mp4` uses 240 recorded frames at 24 fps (10 seconds), with two actual 120 Hz physics steps per display frame (5× slow playback). It has 324 moving bodies, **not** 10,000. The visible shapes are actual C++ rigid-body poses; contact counts and island counts come from the simulation.
 
 See [docs/STAGE9_SCALING.md](docs/STAGE9_SCALING.md) for benchmark details, limitations and reproducibility. The MP4 and JSON output are not stored in GitHub; run the capture locally to recreate them. No GitHub Actions are required.
+
+### Stage 10 — million-body CPU capacity and reproducible GPU experiment
+
+**See [Stage 10 technical report](docs/STAGE10_CPU_GPU.md)** and the runnable [Kaggle notebook](notebooks/avbd_stage10_kaggle.ipynb). On the test machine the C++ engine advanced **one million isolated bodies** in about 556 ms/step using the new optional certified free-flight path; **zero contacts** were present. The separate one-million-body SoA translation kernel measured ~2.57 ms/step, but omits all collision and angular solve work. No real GPU run has been completed here.
+
+```
+./build/avbd3d_million_benchmark 1000000 3 certified
+./build/avbd3d_soa_reference 1000000 100
+./build/avbd3d_freeflight_capture > stage10-trace.json
+python tools/render_freeflight.py stage10-trace.json stage10-sparse-physics.mp4
+```
+
+No GitHub Actions, paid APIs, or hidden GPU fallbacks. The original solver is still the default; all experimental optimizations are opt-in.

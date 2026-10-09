@@ -63,3 +63,13 @@ add_executable(avbd3d_scaling_benchmark src/benchmark_scaling.cpp)
 target_link_libraries(avbd3d_scaling_benchmark PRIVATE avbd3d)
 add_executable(avbd3d_scaling_capture src/scaling_capture.cpp)
 target_link_libraries(avbd3d_scaling_capture PRIVATE avbd3d)
+
+# Stage 10: certified no-contact CPU scaling and portable Kaggle experiment.
+add_executable(avbd3d_freeflight_tests tests/freeflight.cpp)
+target_link_libraries(avbd3d_freeflight_tests PRIVATE avbd3d)
+add_test(NAME certified_freeflight COMMAND avbd3d_freeflight_tests)
+add_executable(avbd3d_million_benchmark src/million_benchmark.cpp)
+target_link_libraries(avbd3d_million_benchmark PRIVATE avbd3d)
+add_executable(avbd3d_soa_reference src/soa_reference.cpp)
+add_executable(avbd3d_freeflight_capture src/freeflight_capture.cpp)
+target_link_libraries(avbd3d_freeflight_capture PRIVATE avbd3d)

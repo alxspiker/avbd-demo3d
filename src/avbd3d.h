@@ -76,6 +76,8 @@ struct Statistics {
     int impactEvents=0, ccdSubsteps=1, brokenJoints=0, sleepingBodies=0;
     int ccdEvents=0, ccdCandidates=0, ccdUnresolved=0, ccdUnsupportedRotation=0, solverColors=0;
     int broadphaseCandidates=0, collisionIslands=0, largestIsland=0;
+    int certifiedFreeFlight=0; // 1 only if every padded predicted AABB is proven isolated
+    int freeFlightBodies=0;
 };
 struct Settings {
     double dt=1.0/120.0;
@@ -95,6 +97,8 @@ struct Settings {
     bool enableSpatialBroadphase=false; // Deterministic 3D BVH, optional alternative to 1D sweep-and-prune
     bool enableParallelNarrowphase=false; // Parallel independent contact generation; stable serial manifold merge
     bool enableIslandSolver=false; // Parallel disconnected constraint islands, with graph-color fallback
+    bool enableCertifiedFreeFlight=false; // Stage 10: exact discrete-step separation certificate, skip zero-contact AVBD solver
+    double freeFlightCellSize=2.0; // Positive world-space voxel width for the conservative certificate
     int parallelThreads=0; // 0 = OpenMP default
     bool enableAdaptiveSubsteps=false; // Conservative discrete substepping; NOT exact swept CCD
     int maxSubsteps=64;

@@ -7,6 +7,8 @@
 #include <numeric>
 #include <functional>
 #include <atomic>
+#include <unordered_set>
+#include <cstdint>
 #ifdef AVBD_HAS_OPENMP
 #include <omp.h>
 #endif
@@ -282,6 +284,56 @@ static std::vector<std::pair<int,int>> broadphase(const std::vector<Bounds>& box
     std::sort(pairs.begin(),pairs.end());
     return pairs;
 }
+// Stage 10: a *sufficient*, not necessary, proof that the predicted bodies
+// cannot generate any discrete contacts. Each padded AABB is conservatively
+// assigned to every 3D grid cell it touches. A cell used by two AABBs means
+// we cannot certify the frame; run the normal solver without changing results.
+// Large objects / static floors intentionally reject this fast path. This is
+// a contact-free optimization, NOT swept CCD or a dense-contact GPU solver.
+struct FreeCell {
+    int64_t x,y,z;
+    bool operator==(const FreeCell& b) const {return x==b.x && y==b.y && z==b.z;}
+};
+struct FreeCellHash {
+    size_t operator()(const FreeCell& c)const{
+        auto mix=[](uint64_t v){v^=v>>30;v*=0xbf58476d1ce4e5b9ULL;v^=v>>27;v*=0x94d049bb133111ebULL;return v^(v>>31);};
+        return static_cast<size_t>(mix(static_cast<uint64_t>(c.x)) ^
+            mix(static_cast<uint64_t>(c.y)+0x9e3779b97f4a7c15ULL) ^
+            mix(static_cast<uint64_t>(c.z)+0x243f6a8885a308d3ULL));
+    }
+};
+static bool certifySeparatedPredictedAABBs(const std::vector<Body>& bodies,const Settings& settings){
+    const double cell=settings.freeFlightCellSize;
+    if(!(cell>0) || !std::isfinite(cell))throw std::invalid_argument("freeFlightCellSize must be finite and positive");
+    std::unordered_set<FreeCell,FreeCellHash> occupied;
+    if(bodies.size()>static_cast<size_t>(std::numeric_limits<int>::max()))return false;
+    occupied.reserve(bodies.size()*2);
+    const double dt=settings.dt;
+    for(const Body& b:bodies){
+        const Vec3 p=b.dynamic() ? b.p + b.velocity*dt + settings.gravity*(dt*dt) : b.p;
+        const Quat q=b.dynamic() ? (Quat::exp(b.angularVelocity*dt)*b.q).unit():b.q;
+        Vec3 r=b.half;
+        if(b.shape==Shape::Box){
+            const Vec3 ax[3]={q.rotate({1,0,0}),q.rotate({0,1,0}),q.rotate({0,0,1})};
+            r={0,0,0};
+            for(int j=0;j<3;j++)r+=Vec3{std::abs(ax[j].x),std::abs(ax[j].y),std::abs(ax[j].z)}*b.half[j];
+        }
+        const Vec3 pad{settings.contactMargin,settings.contactMargin,settings.contactMargin};
+        const Vec3 shift{cell*.5,cell*.5,cell*.5};
+        const Vec3 lo=(p-r-pad+shift)/cell,hi=(p+r+pad+shift)/cell;
+        // Keep floor() in a range guaranteed safe for integer conversion.
+        for(int j=0;j<3;j++)if(!std::isfinite(lo[j])||!std::isfinite(hi[j])||
+            lo[j]<-1e12||hi[j]>1e12||hi[j]-lo[j]>1.0)return false;
+        const int64_t ax=static_cast<int64_t>(std::floor(lo.x)),bx=static_cast<int64_t>(std::floor(hi.x));
+        const int64_t ay=static_cast<int64_t>(std::floor(lo.y)),by=static_cast<int64_t>(std::floor(hi.y));
+        const int64_t az=static_cast<int64_t>(std::floor(lo.z)),bz=static_cast<int64_t>(std::floor(hi.z));
+        if(bx-ax>1||by-ay>1||bz-az>1)return false;
+        for(int64_t x=ax;x<=bx;x++)for(int64_t y=ay;y<=by;y++)for(int64_t z=az;z<=bz;z++)
+            if(!occupied.insert({x,y,z}).second)return false;
+    }
+    return true;
+}
+
 // Joint/contact connectivity through dynamic bodies only. A shared static
 // floor must NOT merge two disconnected stacks into a single island.
 static std::vector<std::vector<int>> buildIslands(const std::vector<Body>& bodies,
@@ -568,6 +620,31 @@ void World::stepCCD(){
 
 void World::stepDiscrete(){
     const double dt=settings.dt;if(settings.postIterations<1||settings.iterations<1)throw std::runtime_error("positive solver iteration counts required");if(dt<=0)throw std::runtime_error("positive fixed step required");
+    // A certified isolated discrete frame has no constraint rows. The unconstrained
+    // 6x6 AVBD minimizer is exactly the inertial predictor, so iterating the
+    // 6x6 solver would do no work. We still reconstruct velocities and validate
+    // finite state. We never enter this path with previous manifolds or joints.
+    if(settings.enableCertifiedFreeFlight && !settings.enableCCD &&
+       !settings.enableSleeping && !settings.enableAdaptiveSubsteps &&
+       joints_.empty() && manifolds_.empty() &&
+       certifySeparatedPredictedAABBs(bodies_,settings)){
+        stats_={};stats_.certifiedFreeFlight=1;stats_.ccdSubsteps=1;
+        for(Body& b:bodies_)if(b.dynamic()){
+            const Vec3 previous=b.p;const Quat prevQ=b.q;
+            b.p+=b.velocity*dt+settings.gravity*(dt*dt);
+            b.q=(Quat::exp(b.angularVelocity*dt)*b.q).unit();
+            b.velocity=(b.p-previous)/dt;
+            b.angularVelocity=(b.q*prevQ.conjugate()).log()/dt;
+            if(!std::isfinite(b.p.x)||!std::isfinite(b.p.y)||!std::isfinite(b.p.z)||!std::isfinite(b.q.w))
+                throw std::runtime_error("non-finite rigid-body state");
+            stats_.maxSpeed=std::max(stats_.maxSpeed,length(b.velocity));
+            stats_.maxAngularSpeed=std::max(stats_.maxAngularSpeed,length(b.angularVelocity));
+            ++stats_.freeFlightBodies;
+        }
+        stats_.collisionIslands=stats_.freeFlightBodies;
+        stats_.largestIsland=stats_.freeFlightBodies>0?1:0;
+        return;
+    }
     stats_={};
     std::vector<Vec3> startP(bodies_.size()),startV(bodies_.size()),startW(bodies_.size());std::vector<Quat> startQ(bodies_.size());
     for(Body& b:bodies_){startP[b.id]=b.p;startQ[b.id]=b.q;startV[b.id]=b.velocity;startW[b.id]=b.angularVelocity;
