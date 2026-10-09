@@ -829,7 +829,16 @@ void World::stepDiscrete(){
                 c.impactSpeed=std::min(0.0,dot(vA-vB,c.n));
             }
         }
-        next[{a,b}]={a,b,std::move(contacts)};
+        if(settings.enablePersistentManifoldStorage && old!=manifolds_.end()){
+            // Reuse the ordered-map node and its contact allocation. The old
+            // witnesses have already been read for warmstarting above.
+            auto node=manifolds_.extract(old);
+            node.mapped().contacts.clear();
+            node.mapped().contacts.swap(contacts);
+            next.insert(std::move(node));
+        }else{
+            next[{a,b}]={a,b,std::move(contacts)};
+        }
     }
     manifolds_=std::move(next);stats_.manifolds=static_cast<int>(manifolds_.size());
     // Per-body force lists, rebuilt from stable manifold keys.
